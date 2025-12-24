@@ -3,8 +3,11 @@ import streamlit as st
 import sqlite_db
 import pandas as pd
 
-st.set_page_config(page_title="対戦（詳細）", page_icon="🎮")
-
+st.set_page_config(
+    page_title="宮田一慶作成！麻雀管理アプリ",
+    page_icon="🀄",
+    layout="centered",
+)
 
 # セッションチェック
 if "title_id" not in st.session_state:
@@ -122,7 +125,18 @@ with st.form("game_detail_form"):
 if not game_details:
     st.info("対戦詳細がありません。新規作成してください。")
 
+
 else:
+
+    # ===== データ削除フォーム =====
+    with st.expander("🗑️ データの削除"):
+        # 連番のリストを作成
+        renbans = [d["renban"] for d in game_details]
+        target = st.selectbox("削除する回数を選択", renbans, index=len(renbans) - 1)
+        if st.button("選択した行を削除する", type="primary"):
+            sqlite_db.delete_game_detail(title_id, game_id, target)
+            st.rerun()
+
     # ===== 明細行作成 =====
     table_rows = []
 

@@ -3,7 +3,11 @@ import streamlit as st
 import sqlite_db
 import pandas as pd
 
-st.set_page_config(page_title="対戦（一覧）", page_icon="🎮")
+st.set_page_config(
+    page_title="宮田一慶作成！麻雀管理アプリ",
+    page_icon="🀄",
+    layout="centered",
+)
 
 # セッションチェック
 if "title_id" not in st.session_state:
@@ -122,127 +126,128 @@ st.markdown("### 🧮 対戦サマリー")
 
 if not games:
     st.info("対戦がありません。新規作成してください。")
-
-summary_rows = sqlite_db.fetch_game_summary(title_id)
-
-if not summary_rows:
-    st.info("まだ集計データがありません。")
 else:
-    df_summary = pd.DataFrame(
-        summary_rows,
-        columns=["player_id", "player_name", "win_count", "total_score"],
-    )
-    df_summary = df_summary[df_summary["total_score"] != 0]
-    df_summary = df_summary.rename(
-        columns={
-            "player_name": "プレイヤー",
-            "win_count": "1位回数",
-            "total_score": "合計スコア",
-        }
-    )
-    df_summary = df_summary.sort_values("合計スコア", ascending=False)
 
-    st.dataframe(df_summary, use_container_width=True, hide_index=True)
+    summary_rows = sqlite_db.fetch_game_summary(title_id)
 
-    # ===== 対戦一覧表示 =====
-    for game in games:
-        with st.container(border=True):
-            st.subheader(game["game_name"])
-            st.caption(
-                "作成日時："
-                + datetime.datetime.strptime(
-                    game["create_date"], "%Y-%m-%d %H:%M:%S"
-                ).strftime("%Y-%m-%d %H:%M:%S")
-            )
-            players_list = []
-            for i in range(1, 5):
-                p_name = game[f"player{i}_name"]
-                if p_name:
-                    players_list.append(p_name)
-            # selection_mode="single" とし、default=None にすることで初期状態で何も選択されないようにします
-            st.pills(
-                "参加プレイヤー",
-                players_list,
-                selection_mode="single",
-                default=None,
-                disabled=True,
-                key=f"pills_{game['game_id']}",
-            )
+    if not summary_rows:
+        st.info("まだ集計データがありません。")
+    else:
+        df_summary = pd.DataFrame(
+            summary_rows,
+            columns=["player_id", "player_name", "win_count", "total_score"],
+        )
+        df_summary = df_summary[df_summary["total_score"] != 0]
+        df_summary = df_summary.rename(
+            columns={
+                "player_name": "プレイヤー",
+                "win_count": "1位回数",
+                "total_score": "合計スコア",
+            }
+        )
+        df_summary = df_summary.sort_values("合計スコア", ascending=False)
 
-            # ===== 対戦の結果をリスト表示 =====
-            # ===== 明細行作成 =====
-            table_rows = []
+        st.dataframe(df_summary, use_container_width=True, hide_index=True)
 
-            game_details = sqlite_db.fetch_game_detail(title_id, game["game_id"])
-            for detail in game_details:
-                dt = datetime.datetime.strptime(
-                    detail["create_date"], "%Y-%m-%d %H:%M:%S"
+        # ===== 対戦一覧表示 =====
+        for game in games:
+            with st.container(border=True):
+                st.subheader(game["game_name"])
+                st.caption(
+                    "作成日時："
+                    + datetime.datetime.strptime(
+                        game["create_date"], "%Y-%m-%d %H:%M:%S"
+                    ).strftime("%Y-%m-%d %H:%M:%S")
                 )
-
-                table_rows.append(
-                    {
-                        "回数": detail["renban"],
-                        "時刻": dt.strftime("%H:%M"),
-                        game["player1_name"]: detail["player1_score"],
-                        game["player2_name"]: detail["player2_score"],
-                        game["player3_name"]: detail["player3_score"],
-                        game["player4_name"]: detail["player4_score"],
-                    }
-                )
-
-            # table_rowsが空の場合の処理
-            if not table_rows:
-                st.info("対戦詳細がありません。")
-
-            else:
-                df = pd.DataFrame(table_rows)
-
-                # ===== 合計行作成 =====
-                total_row = {
-                    "回数": "合計",
-                    "時刻": "",
-                    game["player1_name"]: df[game["player1_name"]].sum(),
-                    game["player2_name"]: df[game["player2_name"]].sum(),
-                    game["player3_name"]: df[game["player3_name"]].sum(),
-                    game["player4_name"]: df[game["player4_name"]].sum(),
-                }
-
-                total_df = pd.DataFrame([total_row])
-
-                # ===== 合計行を先頭に追加 =====
-                df = pd.concat([total_df, df], ignore_index=True)
-
-                # ===== 最大スコア強調（合計行は除外） =====
-                def highlight_max(row):
-                    # 合計行
-                    if row["回数"] == "合計":
-                        return ["font-weight: bold"] * len(row)
-
-                    score_cols = row.index[2:]  # 回数・時刻を除外
-                    max_val = row[score_cols].max()
-
-                    return [
-                        (
-                            "background-color: #ffd966"
-                            if col in score_cols and row[col] == max_val
-                            else ""
-                        )
-                        for col in row.index
-                    ]
-
-                # ===== 表示 =====
-                st.markdown("### 対戦結果")
-
-                st.dataframe(
-                    df.style.apply(highlight_max, axis=1),
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-            if st.button("▶ この対戦を開く", key=f"btn_{game['game_id']}"):
-                st.session_state["game_id"] = game["game_id"]
-                st.session_state["game_name"] = game["game_name"]
+                players_list = []
                 for i in range(1, 5):
-                    st.session_state[f"player{i}_id"] = game[f"player{i}_id"]
-                    st.session_state[f"player{i}_name"] = game[f"player{i}_name"]
-                st.switch_page("pages/game_detail.py")
+                    p_name = game[f"player{i}_name"]
+                    if p_name:
+                        players_list.append(p_name)
+                # selection_mode="single" とし、default=None にすることで初期状態で何も選択されないようにします
+                st.pills(
+                    "参加プレイヤー",
+                    players_list,
+                    selection_mode="single",
+                    default=None,
+                    disabled=True,
+                    key=f"pills_{game['game_id']}",
+                )
+
+                # ===== 対戦の結果をリスト表示 =====
+                # ===== 明細行作成 =====
+                table_rows = []
+
+                game_details = sqlite_db.fetch_game_detail(title_id, game["game_id"])
+                for detail in game_details:
+                    dt = datetime.datetime.strptime(
+                        detail["create_date"], "%Y-%m-%d %H:%M:%S"
+                    )
+
+                    table_rows.append(
+                        {
+                            "回数": detail["renban"],
+                            "時刻": dt.strftime("%H:%M"),
+                            game["player1_name"]: detail["player1_score"],
+                            game["player2_name"]: detail["player2_score"],
+                            game["player3_name"]: detail["player3_score"],
+                            game["player4_name"]: detail["player4_score"],
+                        }
+                    )
+
+                # table_rowsが空の場合の処理
+                if not table_rows:
+                    st.info("対戦詳細がありません。")
+
+                else:
+                    df = pd.DataFrame(table_rows)
+
+                    # ===== 合計行作成 =====
+                    total_row = {
+                        "回数": "合計",
+                        "時刻": "",
+                        game["player1_name"]: df[game["player1_name"]].sum(),
+                        game["player2_name"]: df[game["player2_name"]].sum(),
+                        game["player3_name"]: df[game["player3_name"]].sum(),
+                        game["player4_name"]: df[game["player4_name"]].sum(),
+                    }
+
+                    total_df = pd.DataFrame([total_row])
+
+                    # ===== 合計行を先頭に追加 =====
+                    df = pd.concat([total_df, df], ignore_index=True)
+
+                    # ===== 最大スコア強調（合計行は除外） =====
+                    def highlight_max(row):
+                        # 合計行
+                        if row["回数"] == "合計":
+                            return ["font-weight: bold"] * len(row)
+
+                        score_cols = row.index[2:]  # 回数・時刻を除外
+                        max_val = row[score_cols].max()
+
+                        return [
+                            (
+                                "background-color: #ffd966"
+                                if col in score_cols and row[col] == max_val
+                                else ""
+                            )
+                            for col in row.index
+                        ]
+
+                    # ===== 表示 =====
+                    st.markdown("### 対戦結果")
+
+                    st.dataframe(
+                        df.style.apply(highlight_max, axis=1),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+
+                if st.button("▶ この対戦を開く", key=f"btn_{game['game_id']}"):
+                    st.session_state["game_id"] = game["game_id"]
+                    st.session_state["game_name"] = game["game_name"]
+                    for i in range(1, 5):
+                        st.session_state[f"player{i}_id"] = game[f"player{i}_id"]
+                        st.session_state[f"player{i}_name"] = game[f"player{i}_name"]
+                    st.switch_page("pages/game_detail.py")

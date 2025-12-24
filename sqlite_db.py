@@ -266,6 +266,20 @@ def insert_game_detail(
     conn.close()
 
 
+def delete_game_detail(title_id, game_id, renban):
+    """
+    指定された対局明細を論理削除する
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "UPDATE game_detail_table SET flg = 1 WHERE title_id = ? AND game_id = ? AND renban = ?",
+        (title_id, game_id, renban),
+    )
+    conn.commit()
+    conn.close()
+
+
 def fetch_game_summary(title_id):
     """
     指定された title_id のゲーム集計情報を取得（SQLite対応版：1位回数を含む）
