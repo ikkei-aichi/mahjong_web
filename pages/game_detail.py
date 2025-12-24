@@ -4,196 +4,169 @@ import sqlite_db
 import pandas as pd
 
 st.set_page_config(
-    page_title="宮田一慶作成！麻雀管理アプリ",
+    page_title="対戦詳細 - 麻雀管理アプリ",
     page_icon="🀄",
     layout="centered",
 )
+
+# --- 1. 戻るボタンを最上部に配置 ---
+if st.button("← 対戦一覧へ戻る"):
+    st.switch_page("pages/game_list.py")
+st.divider()
 
 # セッションチェック
 if "title_id" not in st.session_state:
     st.error("タイトルが選択されていません。")
     st.stop()
 
-
-# game一覧を取得
+# データの取得
 title_id = st.session_state["title_id"]
+title_name = st.session_state["title_name"]
 game_id = st.session_state.get("game_id")
 game_details = sqlite_db.fetch_game_detail(title_id, game_id)
 
-# ===== 戻るボタン =====
-if st.button("← 対戦一覧へ戻る"):
-    st.switch_page("pages/game_list.py")
-with st.sidebar:
-    if st.button("← 対戦一覧へ戻る"):
-        st.switch_page("pages/game_list.py")
+# プレイヤー名の取得
+p_names = [
+    st.session_state.get("player1_name"),
+    st.session_state.get("player2_name"),
+    st.session_state.get("player3_name"),
+    st.session_state.get("player4_name"),
+]
 
-title_id = st.session_state["title_id"]
-title_name = st.session_state["title_name"]
-player1_id = st.session_state["player1_id"]
-player2_id = st.session_state["player2_id"]
-player3_id = st.session_state["player3_id"]
-player4_id = st.session_state["player4_id"]
-player1_name = st.session_state["player1_name"]
-player2_name = st.session_state["player2_name"]
-player3_name = st.session_state["player3_name"]
-player4_name = st.session_state["player4_name"]
+# 参加しているプレイヤー（名前がある人）のインデックスを特定
+active_idxs = [i for i, name in enumerate(p_names) if name]
+num_players = len(active_idxs)
 
 st.title(f"🀄 {title_name}")
-st.caption(f"タイトルID:{title_id} / 対戦ID:{game_id}")
+st.caption(f"対戦ID:{game_id} / {num_players}人麻雀モード")
 
-
-# ===== 対戦詳細新規作成フォーム =====
+# --- 2. スコア入力フォーム ---
 with st.form("game_detail_form"):
-    st.markdown("### 対戦結果を入力")
+    st.markdown("### 今回のスコア（持ち点）を入力")
 
-    # 入力欄 --- 東・南・西・北
-    player1_kaze = st.selectbox(f"{player1_name} 風", ["東", "南", "西", "北"])
-    player2_kaze = st.selectbox(f"{player2_name} 風", ["東", "南", "西", "北"])
-    player3_kaze = st.selectbox(f"{player3_name} 風", ["東", "南", "西", "北"])
-    player4_kaze = st.selectbox(f"{player4_name} 風", ["東", "南", "西", "北"])
+    # 4人なら2列、3人なら3列で表示
+    cols = st.columns(num_players)
+    kaze_inputs = []
+    score_inputs = []
 
-    # 入力欄 --- スコア入力
-    player1_score = st.number_input(f"{player1_name} スコア", value=25000, step=1000)
-    player2_score = st.number_input(f"{player2_name} スコア", value=25000, step=1000)
-    player3_score = st.number_input(f"{player3_name} スコア", value=25000, step=1000)
-    player4_score = st.number_input(f"{player4_name} スコア", value=25000, step=1000)
+    # デフォルトの持ち点設定
+    default_score = 25000 if num_players == 4 else 35000
 
-    scores = [player1_score, player2_score, player3_score, player4_score]
-    # トップのインデックス
-    top_index = scores.index(max(scores))
-    # 30000返しの収支
-    diffs = [s - 30000 for s in scores]
-    # トップに残り（+20000）を加算
-    diffs[top_index] += 20000
-    player1_score, player2_score, player3_score, player4_score = diffs
+    for i, idx in enumerate(active_idxs):
+        with cols[i]:
+            name = p_names[idx]
+            kaze = st.selectbox(
+                f"{name} 風", ["東", "南", "西", "北"], key=f"kaze_{idx}", index=i
+            )
+            score = st.number_input(
+                f"{name}", value=default_score, step=1000, key=f"score_{idx}"
+            )
+            kaze_inputs.append(kaze)
+            score_inputs.append(score)
 
-    submitted = st.form_submit_button("登録")
+    submitted = st.form_submit_button("この結果を登録する")
 
     if submitted:
-        title_id = st.session_state["title_id"]
-        game_id = st.session_state.get("game_id")
-
-        # バリデーションチェック
-        if not game_id:
-            st.error("対戦が選択されていません。")
-            st.stop()
-
         # 風の重複チェック
-        if (
-            player1_kaze == player2_kaze
-            or player1_kaze == player3_kaze
-            or player1_kaze == player4_kaze
-            or player2_kaze == player3_kaze
-            or player2_kaze == player4_kaze
-            or player3_kaze == player4_kaze
-        ):
-            st.error("各プレイヤーの風は重複しないように選択してください。")
-            st.stop()
-
-        # 一位が複数いる場合エラー
-        if scores.count(max(scores)) > 1:
-            st.error("スコアの一位が複数います。正しいスコアを入力してください。")
-            st.stop()
-
-        # renbanは現在の最大値+1
-        game_details = sqlite_db.fetch_game_detail(title_id, game_id)
-        if game_details:
-            renban = max([detail["renban"] for detail in game_details]) + 1
+        if len(set(kaze_inputs)) != num_players:
+            st.error("風が重複しています。")
+        elif score_inputs.count(max(score_inputs)) > 1:
+            st.error("同点1位がいます。順位を確定させてください。")
         else:
-            renban = 1
+            # --- 🧮 計算ロジック (4麻/3麻で整合性を取る) ---
+            # 4麻: 25k持ち30k返し (オカ20k) -> 合計-20kからトップに+20kで合計0
+            # 3麻: 35k持ち40k返し (オカ15k) -> 合計-15kからトップに+15kで合計0
+            if num_players == 4:
+                kaeshi = 30000
+                oka = 20000
+            else:
+                kaeshi = 40000  # 35k持ち40k返しを想定（合計を0にするため）
+                oka = 15000  # (40k-35k)*3 = 15kがトップに集まる
 
-        #
+            top_idx_in_active = score_inputs.index(max(score_inputs))
 
-        sqlite_db.insert_game_detail(
-            title_id,
-            game_id,
-            renban,
-            player1_score,
-            player2_score,
-            player3_score,
-            player4_score,
-            player1_kaze,
-            player2_kaze,
-            player3_kaze,
-            player4_kaze,
-        )
+            final_scores = [0, 0, 0, 0]  # 初期化
+            final_kazes = [None, None, None, None]
 
-        st.success("対戦結果を登録しました。")
-        st.rerun()
+            for i, idx in enumerate(active_idxs):
+                # 収支 = 持ち点 - 返し点
+                diff = score_inputs[i] - kaeshi
+                # 1位ならオカ（余り点）を加算
+                if i == top_idx_in_active:
+                    diff += oka
 
+                final_scores[idx] = diff
+                final_kazes[idx] = kaze_inputs[i]
 
+            # DBへ登録
+            renban = max([d["renban"] for d in game_details]) + 1 if game_details else 1
+            sqlite_db.insert_game_detail(
+                title_id,
+                game_id,
+                renban,
+                final_scores[0],
+                final_scores[1],
+                final_scores[2],
+                final_scores[3],
+                final_kazes[0],
+                final_kazes[1],
+                final_kazes[2],
+                final_kazes[3],
+            )
+            st.success("対戦結果を登録しました。")
+            st.rerun()
+
+# --- 3. 結果表示エリア ---
+st.markdown("---")
 if not game_details:
-    st.info("対戦詳細がありません。新規作成してください。")
-
-
+    st.info("まだ対戦結果が登録されていません。")
 else:
-
-    # ===== データ削除フォーム =====
+    # 削除機能
     with st.expander("🗑️ データの削除"):
-        # 連番のリストを作成
         renbans = [d["renban"] for d in game_details]
         target = st.selectbox("削除する回数を選択", renbans, index=len(renbans) - 1)
-        if st.button("選択した行を削除する", type="primary"):
+        if st.button("選択した行を削除", type="primary"):
             sqlite_db.delete_game_detail(title_id, game_id, target)
             st.rerun()
 
-    # ===== 明細行作成 =====
+    # 表示用テーブル作成
     table_rows = []
-
-    for detail in game_details:
-        dt = datetime.datetime.strptime(detail["create_date"], "%Y-%m-%d %H:%M:%S")
-
-        table_rows.append(
-            {
-                "回数": detail["renban"],
-                "時刻": dt.strftime("%H:%M"),
-                player1_name: detail["player1_score"],
-                player2_name: detail["player2_score"],
-                player3_name: detail["player3_score"],
-                player4_name: detail["player4_score"],
-            }
-        )
+    for d in game_details:
+        dt = datetime.datetime.strptime(d["create_date"], "%Y-%m-%d %H:%M:%S")
+        row = {"回": d["renban"], "時刻": dt.strftime("%H:%M")}
+        for idx in active_idxs:
+            name = p_names[idx]
+            row[name] = d[f"player{idx+1}_score"]
+        table_rows.append(row)
 
     df = pd.DataFrame(table_rows)
 
-    # ===== 合計行作成 =====
-    total_row = {
-        "回数": "合計",
-        "時刻": "",
-        player1_name: df[player1_name].sum(),
-        player2_name: df[player2_name].sum(),
-        player3_name: df[player3_name].sum(),
-        player4_name: df[player4_name].sum(),
-    }
+    # 合計行の追加
+    total_row = {"回": "合計", "時刻": ""}
+    for idx in active_idxs:
+        name = p_names[idx]
+        total_row[name] = df[name].sum()
+    df = pd.concat([pd.DataFrame([total_row]), df], ignore_index=True)
 
-    total_df = pd.DataFrame([total_row])
-
-    # ===== 合計行を先頭に追加 =====
-    df = pd.concat([total_df, df], ignore_index=True)
-
-    # ===== 最大スコア強調（合計行は除外） =====
-    def highlight_max(row):
-        # 合計行
-        if row["回数"] == "合計":
+    # 1位の強調スタイル
+    def highlight_results(row):
+        if row["回"] == "合計":
             return ["font-weight: bold"] * len(row)
-
-        score_cols = row.index[2:]  # 回数・時刻を除外
-        max_val = row[score_cols].max()
-
+        # 参加プレイヤーの列名リスト
+        p_cols = [p_names[i] for i in active_idxs]
+        max_val = row[p_cols].max()
         return [
             (
-                "background-color: #ffd966"
-                if col in score_cols and row[col] == max_val
+                "color: #ff4b4b; font-weight: bold"
+                if (col in p_cols and row[col] == max_val)
                 else ""
             )
             for col in row.index
         ]
 
-    # ===== 表示 =====
-    st.markdown("### 対戦結果")
-
+    st.markdown("### 対戦結果（収支）")
     st.dataframe(
-        df.style.apply(highlight_max, axis=1),
+        df.style.apply(highlight_results, axis=1),
         use_container_width=True,
         hide_index=True,
     )
