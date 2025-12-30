@@ -165,7 +165,7 @@ def delete_game_detail(title_id, game_id, renban):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "UPDATE game_detail_table SET flg = 1 WHERE title_id = ? AND game_id = ? AND renban = ?",
+        "DELETE FROM game_detail_table WHERE title_id = ? AND game_id = ? AND renban = ?",
         (title_id, game_id, renban),
     )
     conn.commit()
