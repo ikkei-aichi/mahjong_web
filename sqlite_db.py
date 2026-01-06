@@ -126,6 +126,10 @@ def fetch_game_detail(title_id, game_id):
             COALESCE(player2_score, 0) as player2_score,
             COALESCE(player3_score, 0) as player3_score,
             COALESCE(player4_score, 0) as player4_score,
+            player1_kaze,
+            player2_kaze,
+            player3_kaze,
+            player4_kaze,
             create_date,
             flg
         FROM game_detail_table
@@ -136,7 +140,6 @@ def fetch_game_detail(title_id, game_id):
     )
     rows = cur.fetchall()
     conn.close()
-    # 辞書のリストに変換して返す（Pandasで扱いやすくするため）
     return [dict(row) for row in rows]
 
 
@@ -165,8 +168,33 @@ def delete_game_detail(title_id, game_id, renban):
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
-        "UPDATE game_detail_table SET flg = 1 WHERE title_id = ? AND game_id = ? AND renban = ?",
+        "DELETE FROM game_detail_table WHERE title_id = ? AND game_id = ? AND renban = ?",
         (title_id, game_id, renban),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_game_detail(
+    title_id, game_id, renban, p1_s, p2_s, p3_s, p4_s, p1_k, p2_k, p3_k, p4_k
+):
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        UPDATE game_detail_table
+        SET
+            player1_score = ?,
+            player2_score = ?,
+            player3_score = ?,
+            player4_score = ?,
+            player1_kaze = ?,
+            player2_kaze = ?,
+            player3_kaze = ?,
+            player4_kaze = ?
+        WHERE title_id = ? AND game_id = ? AND renban = ?
+        """,
+        (p1_s, p2_s, p3_s, p4_s, p1_k, p2_k, p3_k, p4_k, title_id, game_id, renban),
     )
     conn.commit()
     conn.close()
