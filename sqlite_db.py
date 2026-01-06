@@ -144,10 +144,23 @@ def fetch_game_detail(title_id, game_id):
 
 
 def insert_game_detail(
-    title_id, game_id, renban, p1_s, p2_s, p3_s, p4_s, p1_k, p2_k, p3_k, p4_k
+    title_id, game_id, p1_s, p2_s, p3_s, p4_s, p1_k, p2_k, p3_k, p4_k
 ):
     conn = get_connection()
     cur = conn.cursor()
+
+    # --- renban を DB で決定 ---
+    cur.execute(
+        """
+        SELECT COALESCE(MAX(renban), 0) + 1
+        FROM game_detail_table
+        WHERE title_id = ? AND game_id = ?
+        """,
+        (title_id, game_id),
+    )
+    renban = cur.fetchone()[0]
+
+    # --- INSERT ---
     cur.execute(
         """
         INSERT INTO game_detail_table (
@@ -158,8 +171,21 @@ def insert_game_detail(
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, DATETIME('now'), 0)
         """,
-        (title_id, game_id, renban, p1_s, p2_s, p3_s, p4_s, p1_k, p2_k, p3_k, p4_k),
+        (
+            title_id,
+            game_id,
+            renban,
+            p1_s,
+            p2_s,
+            p3_s,
+            p4_s,
+            p1_k,
+            p2_k,
+            p3_k,
+            p4_k,
+        ),
     )
+
     conn.commit()
     conn.close()
 

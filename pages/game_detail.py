@@ -101,11 +101,9 @@ with st.form("game_detail_form"):
                 final_scores[idx] = final_pts[i]
                 final_kazes[idx] = kaze_inputs[i]
 
-            renban = max([d["renban"] for d in game_details]) + 1 if game_details else 1
             sqlite_db.insert_game_detail(
                 title_id,
                 game_id,
-                renban,
                 final_scores[0],
                 final_scores[1],
                 final_scores[2],
@@ -118,8 +116,21 @@ with st.form("game_detail_form"):
             st.success("対戦結果を登録しました。")
             st.rerun()
 
-    # --- 3. 結果表示エリア ---
-    st.markdown("### 対戦結果（ポイント）")
+# --- 3. 結果表示エリア ---
+st.markdown("---")
+st.markdown("### 対戦結果（ポイント）")
+
+if not game_details:
+    st.info("データ無し（まだ対戦結果が登録されていません）")
+else:
+    # --- データの削除機能 (復活) ---
+    with st.expander("🗑️ 特定の回を削除する"):
+        renbans = [d["renban"] for d in game_details]
+        target = st.selectbox("削除する「回」を選択", renbans, index=len(renbans) - 1)
+        if st.button("選択した行を削除", type="primary", use_container_width=True):
+            sqlite_db.delete_game_detail(title_id, game_id, target)
+            st.success(f"{target}回目を削除しました")
+            st.rerun()
 
     table_rows = []
     for d in game_details:
@@ -131,7 +142,7 @@ with st.form("game_detail_form"):
             name = p_names[idx]
             val = d.get(f"player{idx+1}_score", 0)
             kaze = d.get(f"player{idx+1}_kaze", "-")
-            row[name] = f"{val:+} ({kaze})"
+            row[name] = f"{val:+}({kaze})"
         table_rows.append(row)
 
     df = pd.DataFrame(table_rows)
@@ -148,25 +159,15 @@ with st.form("game_detail_form"):
 
     # --- スタイル適用 ---
     def make_pretty(styler):
-        # インデックス（左端の数字）を非表示にする
-        styler.hide(axis="index")
-        # 全セルを右寄せにする
-        styler.set_properties(**{"text-align": "right"})
-        # ヘッダー（項目名）も右寄せにする
+        styler.hide(axis="index")  # インデックスを隠す
+        styler.set_properties(
+            **{"text-align": "right", "font-family": "monospace"}
+        )  # 右寄せ&等幅
         styler.set_table_styles(
             [{"selector": "th", "props": [("text-align", "right")]}]
-        )
-
-        # 1位の赤字太字判定
-        def highlight_max(s):
-            if s.name in ["回", "時刻"]:
-                return [""] * len(s)
-            # 各行（回）ごとの最大値を判定
-            return []  # apply(axis=1)で制御するためここは空
-
+        )  # ヘッダー右寄せ
         return styler
 
-    # 行ごとのスタイル判定用関数
     def style_row(row):
         styles = ["text-align: right"] * len(row)
         if row["回"] == "合計":
@@ -174,7 +175,7 @@ with st.form("game_detail_form"):
                 s + "; font-weight: bold; background-color: #f0f2f6" for s in styles
             ]
 
-        # 数値比較
+        # 数値比較で1位を赤太字に
         valid_cols = [p_names[i] for i in active_idxs]
         vals = []
         for col in valid_cols:
@@ -187,9 +188,12 @@ with st.form("game_detail_form"):
             max_v = max(vals)
             for i, col_name in enumerate(row.index):
                 if col_name in valid_cols:
-                    v = int(row[col_name].split(" ")[0])
-                    if v == max_v:
-                        styles[i] += "; color: #ff4b4b; font-weight: bold"
+                    try:
+                        v = int(row[col_name].split(" ")[0])
+                        if v == max_v:
+                            styles[i] += "; color: #ff4b4b; font-weight: bold"
+                    except:
+                        pass
         return styles
 
     # スタイルを適用して表示
