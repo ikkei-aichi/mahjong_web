@@ -1,0 +1,29 @@
+# --- 機密情報（絶対にコミットしない） ---
+# DBパスワード・APIキーが入る。漏洩するとSupabaseのデータを第三者が全削除できる
+.streamlit/secrets.toml
+.streamlit/secrets.toml.*
+.env
+.env.*
+
+# --- ローカルDB（Supabase移行により不要） ---
+app.db
+*.sqlite3
+
+# --- 生成物（mahjong/migrations/*.sql から作られる） ---
+schema.sql
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# --- 仮想環境 ---
+.venv/
+venv/
+
+# --- エディタ / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

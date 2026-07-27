@@ -1,3 +1,16 @@
+# --- アプリ本体 ---
 streamlit
-motor
-pydantic
+pandas
+altair
+
+# --- Supabase / Postgres ---
+# データ操作は SQLAlchemy 直結、認証(Auth)のみ supabase-py を使うハイブリッド構成
+SQLAlchemy>=2.0
+psycopg2-binary
+supabase
+
+# --- ログインセッションの永続化（F5リロードで再ログインさせないため） ---
+streamlit-cookies-controller
+
+# --- 開発用 ---
+pytest
