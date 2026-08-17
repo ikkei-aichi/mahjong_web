@@ -40,6 +40,7 @@ def _entry(row: dict[str, Any]) -> RoundEntry:
         tobi=bool(row["tobi"]),
         # その半荘の人数。3人卓と4人卓が混ざってもラス率を取り違えない。
         table_size=int(row.get("table_size") or 0),
+        kaze=row.get("kaze") or "",
     )
 
 

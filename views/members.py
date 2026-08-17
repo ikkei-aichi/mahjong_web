@@ -138,8 +138,13 @@ for member in members:
 st.markdown("### ゲストを追加")
 st.caption("アカウントを持たない参加者。対戦の席を作るときにその場で追加することもできます。")
 
-with st.form("add_guest", clear_on_submit=True):
-    guest_name = st.text_input("名前", placeholder="例: 佐藤")
+# clear_on_submit は使わない。追加に失敗した（同名が既にいる等）ときにも
+# 入力欄を空にしてしまい、打ち直しになる。
+# 代わりにキーへ人数を混ぜてあり、追加が成功して人数が変わったときだけ空に戻る。
+with st.form("add_guest"):
+    guest_name = st.text_input(
+        "名前", placeholder="例: 佐藤", key=f"guest_name_{len(members)}"
+    )
     if st.form_submit_button("追加する", width="stretch"):
         try:
             groups_repo.create_player(group["group_id"], guest_name)

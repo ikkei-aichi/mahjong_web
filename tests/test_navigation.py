@@ -100,3 +100,52 @@ def test_pages_are_registered_unconditionally():
 def test_registered_pages_are_importable_syntax(page):
     """登録された画面が構文エラーを持っていないこと。"""
     compile((ROOT / page).read_text(encoding="utf-8"), page, "exec")
+
+
+def test_no_form_uses_clear_on_submit():
+    """`clear_on_submit=True` を使わないこと。
+
+    あれは送信のたびに**無条件で**入力欄を初期値へ戻す。保存が検証で弾かれた
+    ときにも消えるため、1か所打ち間違えただけで全部打ち直しになる。
+    実際、点数入力で「合計が合わない」と弾かれると4人分が消えていた。
+
+    入力欄を空に戻したいときは、ウィジェットのキーに「保存済みの状態」を
+    混ぜる（記録が増えた・内容が変わったときだけキーが変わる＝そのときだけ戻る）。
+
+    ★このテストが静的検査なのは、AppTest が clear_on_submit の挙動を
+      再現しないため。実行時テストではこの退行を検出できない。★
+    """
+    offenders = []
+    for path in [*sorted((ROOT / "views").glob("*.py")), *sorted((ROOT / "mahjong").glob("*.py"))]:
+        text = path.read_text(encoding="utf-8")
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            code = line.split("#", 1)[0]
+            if "clear_on_submit" in code and "True" in code:
+                offenders.append(f"{path.name}:{lineno}")
+    assert not offenders, "clear_on_submit=True が使われている: " + ", ".join(offenders)
+
+
+def test_score_entry_is_a_single_fragment():
+    """入力エリアのフラグメントは1つだけにすること。
+
+    複数に分けると、片方だけが再実行されている間もう片方が描画されず、
+    Streamlit がそのウィジェット状態を「使われていない」として破棄する。
+    結果、修正欄をいじって保存した直後に、入力途中だった新規半荘の点数が
+    配給原点に戻ってしまう（実際にこの不具合が出た）。
+
+    ★静的検査なのは、AppTest がフラグメント単位の再実行を再現しないため。★
+    """
+    import ast
+
+    tree = ast.parse((ROOT / "views" / "game.py").read_text(encoding="utf-8"))
+    decorated = [
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        for deco in node.decorator_list
+        if isinstance(deco, ast.Attribute) and deco.attr == "fragment"
+    ]
+    assert decorated == ["entry_area"], (
+        f"views/game.py のフラグメントが {decorated} になっている。"
+        "入力エリア全体を1つの entry_area() だけに収めること。"
+    )

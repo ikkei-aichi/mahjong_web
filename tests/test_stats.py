@@ -252,3 +252,181 @@ def test_last_rate_uses_table_size_for_mixed_arity():
     ]
     stats = by_id(aggregate(entries, {"a": "アキラ"}, NO_UMA))["a"]
     assert stats.last_rate == 0.5
+
+
+# --- 個人の掘り下げ ---------------------------------------------------------
+
+
+def rounds_fixture():
+    """4半荘。アキラ視点で 1位/4位/1位/2位、風は 東南西北 を1つずつ。"""
+    return [
+        [
+            RoundEntry("a", 1, 40, table_size=4, kaze="東"),
+            RoundEntry("b", 2, 5, table_size=4, kaze="南"),
+            RoundEntry("c", 3, -15, table_size=4, kaze="西"),
+            RoundEntry("d", 4, -30, table_size=4, kaze="北"),
+        ],
+        [
+            RoundEntry("a", 4, -30, table_size=4, kaze="南"),
+            RoundEntry("b", 1, 40, table_size=4, kaze="西"),
+            RoundEntry("c", 2, 5, table_size=4, kaze="北"),
+            RoundEntry("d", 3, -15, table_size=4, kaze="東"),
+        ],
+        [
+            RoundEntry("a", 1, 50, table_size=4, kaze="西"),
+            RoundEntry("b", 3, -10, table_size=4, kaze="北"),
+            RoundEntry("c", 4, -30, table_size=4, kaze="東"),
+            RoundEntry("d", 2, -10, table_size=4, kaze="南"),
+        ],
+        # アキラは4半荘目に不参加（3人打ち）
+        [
+            RoundEntry("b", 1, 30, table_size=3, kaze="東"),
+            RoundEntry("c", 2, 0, table_size=3, kaze="南"),
+            RoundEntry("d", 3, -30, table_size=3, kaze="西"),
+        ],
+    ]
+
+
+def test_player_rounds_only_includes_that_player():
+    from mahjong.stats import player_rounds
+
+    mine = player_rounds(rounds_fixture(), "a")
+    assert len(mine) == 3, "不参加の半荘まで数えている"
+    assert [e.rank for e in mine] == [1, 4, 1]
+
+
+def test_head_to_head_counts_only_shared_rounds():
+    from mahjong.stats import head_to_head
+
+    by_id = {o.player_id: o for o in head_to_head(rounds_fixture(), "a")}
+    # アキラが出た3半荘は全員同卓
+    assert by_id["b"].games == 3
+    assert by_id["b"].my_avg_rank == pytest.approx(2.0)
+    assert by_id["b"].my_total_point == 60
+    # bより上の着順だったのは1半荘目と3半荘目
+    assert by_id["b"].beat == 2
+    assert by_id["b"].beat_rate == pytest.approx(2 / 3)
+
+
+def test_head_to_head_is_sorted_by_games():
+    from mahjong.stats import head_to_head
+
+    result = head_to_head(rounds_fixture(), "a")
+    assert [o.games for o in result] == sorted((o.games for o in result), reverse=True)
+
+
+def test_head_to_head_of_absent_player_is_empty():
+    from mahjong.stats import head_to_head
+
+    assert head_to_head(rounds_fixture(), "zzz") == []
+
+
+def test_kaze_breakdown_groups_by_wind():
+    from mahjong.stats import kaze_breakdown
+
+    by_kaze = {k.kaze: k for k in kaze_breakdown(rounds_fixture(), "a")}
+    assert set(by_kaze) == {"東", "南", "西"}
+    assert by_kaze["東"].games == 1 and by_kaze["東"].avg_rank == 1.0
+    assert by_kaze["南"].avg_point == -30.0
+    assert by_kaze["西"].top_rate == 1.0
+
+
+def test_kaze_breakdown_is_empty_without_wind_data():
+    from mahjong.stats import kaze_breakdown
+
+    rounds = [[RoundEntry("a", 1, 10, table_size=4)]]
+    assert kaze_breakdown(rounds, "a") == []
+
+
+def test_streaks_tracks_longest_and_current():
+    from mahjong.stats import streaks
+
+    # アキラ: 1位, 4位, 1位 → 最長連続トップ1、現在1
+    s = streaks(rounds_fixture(), "a")
+    assert s.longest_top == 1
+    assert s.current_top == 1
+    assert s.longest_last == 1
+    assert s.current_last == 0
+
+
+def test_streaks_counts_consecutive_tops():
+    from mahjong.stats import streaks
+
+    rounds = [
+        [RoundEntry("a", 1, 40, table_size=4), RoundEntry("b", 2, -40, table_size=4)],
+        [RoundEntry("a", 1, 40, table_size=4), RoundEntry("b", 2, -40, table_size=4)],
+        [RoundEntry("a", 1, 40, table_size=4), RoundEntry("b", 2, -40, table_size=4)],
+        [RoundEntry("a", 2, -40, table_size=4), RoundEntry("b", 1, 40, table_size=4)],
+    ]
+    s = streaks(rounds, "a")
+    assert s.longest_top == 3
+    assert s.current_top == 0, "最後がトップでないので継続中ではない"
+    assert s.longest_rentai == 4, "1位も2位も連対"
+
+
+def test_rank_trend_is_a_moving_average():
+    from mahjong.stats import rank_trend
+
+    trend = rank_trend(rounds_fixture(), "a", window=2)
+    # 着順 1, 4, 1 → 窓2の移動平均は 1, 2.5, 2.5
+    assert trend == pytest.approx([1.0, 2.5, 2.5])
+
+
+def test_rank_trend_uses_all_games_until_the_window_fills():
+    from mahjong.stats import rank_trend
+
+    trend = rank_trend(rounds_fixture(), "a", window=10)
+    assert trend == pytest.approx([1.0, 2.5, 2.0])
+
+
+def test_point_by_rank_averages_each_place():
+    from mahjong.stats import point_by_rank
+
+    result = point_by_rank(rounds_fixture(), "a")
+    assert result[1] == pytest.approx(45.0)  # +40 と +50
+    assert result[4] == pytest.approx(-30.0)
+    assert 2 not in result
+
+
+def test_streaks_without_table_size_does_not_call_everything_a_last_place():
+    """卓人数が未設定でも、ラス判定を自分の着順で代用してはいけない。
+
+    `entry.table_size or entry.rank` と書くと rank == rank になり、
+    **全半荘がラス**として数えられる（実際にラス率33%なのに
+    「最長連続ラス12」と表示される不具合が出た）。
+    """
+    from mahjong.stats import streaks
+
+    rounds = [
+        [
+            RoundEntry("a", 1, 40),  # table_size を渡さない
+            RoundEntry("b", 2, 5),
+            RoundEntry("c", 3, -15),
+            RoundEntry("d", 4, -30),
+        ],
+        [
+            RoundEntry("a", 2, 5),
+            RoundEntry("b", 1, 40),
+            RoundEntry("c", 4, -30),
+            RoundEntry("d", 3, -15),
+        ],
+    ]
+    s = streaks(rounds, "a")
+    assert s.longest_last == 0, "1位と2位しか取っていないのにラス扱いされている"
+    assert s.current_last == 0
+    assert s.longest_top == 1
+
+    # 実際にラスを引いた人は正しく数える
+    assert streaks(rounds, "d").longest_last == 1
+
+
+def test_streaks_ignores_rounds_the_player_missed():
+    from mahjong.stats import streaks
+
+    rounds = [
+        [RoundEntry("a", 4, -30, table_size=4), RoundEntry("b", 1, 30, table_size=4)],
+        [RoundEntry("b", 1, 30, table_size=4), RoundEntry("c", 2, -30, table_size=4)],
+        [RoundEntry("a", 4, -30, table_size=4), RoundEntry("b", 1, 30, table_size=4)],
+    ]
+    # a は1半荘目と3半荘目でラス。間の半荘は不参加なので連続扱い。
+    assert streaks(rounds, "a").longest_last == 2

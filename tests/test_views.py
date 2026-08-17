@@ -38,9 +38,23 @@ def submit(app: AppTest, contains: str = ""):
     )
 
 
+def click(app: AppTest, contains: str):
+    """ラベルにその文字を含むボタン。"""
+    for button in app.button:
+        if contains in button.label:
+            return button
+    raise AssertionError(
+        f"ボタンが見つからない（{contains!r}）: " + repr([b.label for b in app.button])
+    )
+
+
 def new_round_inputs(app: AppTest):
-    """新規入力フォームの点数欄だけ。修正用フォームの欄と混ざらないよう key で絞る。"""
+    """新規入力の点数欄だけ。修正用の欄と混ざらないよう key で絞る。"""
     return [n for n in app.number_input if (n.key or "").startswith("new_")]
+
+
+def new_round_winds(app: AppTest):
+    return [s for s in app.selectbox if (s.key or "").startswith("new_")]
 
 
 def texts(app: AppTest) -> str:
@@ -136,6 +150,7 @@ def test_home_renders(monkeypatch, backend):
         ("views/day.py", {"day": True, "tournament": True}),
         ("views/game.py", {"game": True}),
         ("views/stats.py", {}),
+        ("views/player.py", {}),
         ("views/members.py", {}),
         ("views/settings.py", {}),
     ],
@@ -163,12 +178,11 @@ def test_score_entry_saves_a_round(monkeypatch, backend):
 
     # 自動計算が既定でオン → 3人ぶん入れれば足りる
     assert app.checkbox[0].value is True
-    assert len(app.number_input) == 3, "自動計算の席には入力欄が出ないはず"
+    assert len(new_round_inputs(app)) == 3, "自動計算の席には入力欄が出ないはず"
 
-    app.number_input[0].set_value(40000)
-    app.number_input[1].set_value(30000)
-    app.number_input[2].set_value(20000)
-    app = submit(app).click().run()
+    for i, value in enumerate([40000, 30000, 20000]):
+        new_round_inputs(app)[i].set_value(value)
+    app = click(app, "半荘目を登録").click().run()
 
     assert not app.exception
     assert len(backend.rounds) == 1
@@ -181,13 +195,11 @@ def test_score_entry_saves_a_round(monkeypatch, backend):
 def test_score_inputs_reset_after_saving(monkeypatch, backend):
     """保存後に前回の点数が残っていると、連打で無言の二重登録になる。"""
     app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
-    app.number_input[0].set_value(40000)
-    app.number_input[1].set_value(30000)
-    app.number_input[2].set_value(20000)
-    app = submit(app).click().run()
+    for i, value in enumerate([40000, 30000, 20000]):
+        new_round_inputs(app)[i].set_value(value)
+    app = click(app, "半荘目を登録").click().run()
 
     assert len(backend.rounds) == 1
-    # 入力欄は初期値（配給原点）に戻っていること
     assert [n.value for n in new_round_inputs(app)] == [25000, 25000, 25000]
 
 
@@ -197,10 +209,9 @@ def test_save_shows_confirmation_after_rerun(monkeypatch, backend):
     フラッシュメッセージにして、再描画後に必ず出るようにしてある。
     """
     app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
-    app.number_input[0].set_value(40000)
-    app.number_input[1].set_value(30000)
-    app.number_input[2].set_value(20000)
-    app = submit(app).click().run()
+    for i, value in enumerate([40000, 30000, 20000]):
+        new_round_inputs(app)[i].set_value(value)
+    app = click(app, "半荘目を登録").click().run()
 
     assert any("登録しました" in s.value for s in app.success)
 
@@ -208,29 +219,114 @@ def test_save_shows_confirmation_after_rerun(monkeypatch, backend):
 def test_winds_rotate_for_the_next_round(monkeypatch, backend):
     """親は毎半荘移る。前の半荘の風を1つずらした値が初期値になる。"""
     app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
-    assert [s.value for s in app.selectbox[:4]] == ["東", "南", "西", "北"]
+    assert [s.value for s in new_round_winds(app)] == ["東", "南", "西", "北"]
 
-    app.number_input[0].set_value(40000)
-    app.number_input[1].set_value(30000)
-    app.number_input[2].set_value(20000)
-    app = submit(app).click().run()
+    for i, value in enumerate([40000, 30000, 20000]):
+        new_round_inputs(app)[i].set_value(value)
+    app = click(app, "半荘目を登録").click().run()
 
-    assert [s.value for s in app.selectbox[:4]] == ["南", "西", "北", "東"]
+    assert [s.value for s in new_round_winds(app)] == ["南", "西", "北", "東"]
 
 
-def test_wrong_total_is_rejected(monkeypatch, backend):
-    """合計が合わないまま保存すると、差額がまるごとトップの得点になる。"""
+# --- ライブ計算 -------------------------------------------------------------
+
+
+def test_points_are_shown_while_typing(monkeypatch, backend):
+    """登録する前に、その場で順位とポイントが見えること。"""
     app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
-    app.checkbox[0].set_value(False)  # 自動計算を切る
+    for i, value in enumerate([40000, 30000, 20000]):
+        new_round_inputs(app)[i].set_value(value)
     app = app.run()
 
-    assert len(app.number_input) == 4
-    for i, value in enumerate([40000, 30000, 20000, 5000]):  # 合計95,000
-        app.number_input[i].set_value(value)
-    app = submit(app).click().run()
+    shown = texts(app)
+    # ゴットー(10/5/-5/-10)・返し30000 → +40 / +5 / -15 / -30
+    for expected in ("+40", "+5", "-15", "-30"):
+        assert expected in shown, f"{expected} が表示されていない"
+    assert "1位" in shown and "4位" in shown
 
-    assert not backend.rounds, "合計が合わない入力を保存してはいけない"
+
+def test_auto_calculated_seat_shows_its_value(monkeypatch, backend):
+    """自動計算の席にも、実際に入る点数が出ること。"""
+    app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
+    for i, value in enumerate([40000, 30000, 20000]):
+        new_round_inputs(app)[i].set_value(value)
+    app = app.run()
+
+    # 100,000 - (40,000 + 30,000 + 20,000) = 10,000
+    assert "10,000" in texts(app)
+
+
+def test_total_difference_is_shown_live(monkeypatch, backend):
+    """合計と、10万点との差額がその場で分かること。"""
+    app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
+    app.checkbox[0].set_value(False)
+    app = app.run()
+
+    for i, value in enumerate([40000, 33000, 20000, 10000]):  # 合計103,000
+        new_round_inputs(app)[i].set_value(value)
+    app = app.run()
+
+    assert any("103,000" in e.value and "+3,000" in e.value for e in app.error)
+
+
+def test_matching_total_is_shown_as_ok(monkeypatch, backend):
+    app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
+    app.checkbox[0].set_value(False)
+    app = app.run()
+
+    for i, value in enumerate([40000, 30000, 20000, 10000]):
+        new_round_inputs(app)[i].set_value(value)
+    app = app.run()
+
+    assert any("一致" in s.value for s in app.success)
+
+
+def test_duplicate_winds_are_flagged(monkeypatch, backend):
+    app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
+    new_round_winds(app)[1].set_value("東")
+    app = app.run()
+
+    assert any("風が重複" in w.value for w in app.warning)
+
+
+# --- 合計が合わないとき -----------------------------------------------------
+
+
+def test_wrong_total_disables_the_save_button(monkeypatch, backend):
+    """合計が合わないまま保存すると、差額がまるごとトップの得点になる。
+
+    エラーを出すだけでなく、そもそも押せないようにする。
+    """
+    app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
+    app.checkbox[0].set_value(False)
+    app = app.run()
+
+    for i, value in enumerate([40000, 30000, 20000, 5000]):  # 合計95,000
+        new_round_inputs(app)[i].set_value(value)
+    app = app.run()
+
+    assert click(app, "半荘目を登録").disabled, "合計が合わないのに押せてしまう"
     assert any("95,000" in e.value for e in app.error)
+    assert not backend.rounds
+
+
+def test_rejected_input_is_not_wiped(monkeypatch, backend):
+    """合計が合わなくても、打った点数が消えないこと。
+
+    st.form(clear_on_submit=True) は送信のたびに無条件でクリアするため、
+    1か所打ち間違えただけで全部打ち直しになっていた。
+    """
+    app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
+    app.checkbox[0].set_value(False)
+    app = app.run()
+
+    typed = [40000, 33000, 20000, 10000]
+    for i, value in enumerate(typed):
+        new_round_inputs(app)[i].set_value(value)
+    app = app.run()
+
+    assert [n.value for n in new_round_inputs(app)] == typed
+    assert [s.value for s in new_round_winds(app)] == ["東", "南", "西", "北"]
 
 
 def test_wrong_total_is_allowed_when_explicitly_permitted(monkeypatch, backend):
@@ -238,21 +334,17 @@ def test_wrong_total_is_allowed_when_explicitly_permitted(monkeypatch, backend):
     app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
     app.checkbox[0].set_value(False)
     app = app.run()
-    app.checkbox[1].set_value(True)  # 供託あり
-    app = app.run()
 
     for i, value in enumerate([40000, 30000, 20000, 5000]):
-        app.number_input[i].set_value(value)
-    app = submit(app).click().run()
+        new_round_inputs(app)[i].set_value(value)
+    app = app.run()
 
+    mismatch = next(c for c in app.checkbox if "供託" in c.label)
+    app = mismatch.set_value(True).run()
+
+    app = click(app, "半荘目を登録").click().run()
     assert len(backend.rounds) == 1
     assert sum(r["point"] for r in backend.rounds[0]["results"]) == 0
-
-
-def test_score_entry_uses_a_single_form(monkeypatch, backend):
-    """入力ごとにサーバーと往復しないよう、フォームにまとめてある。"""
-    app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
-    assert submit(app) is not None
 
 
 # --- ルール編集（旧実装で壊れていたところ） --------------------------------
@@ -326,10 +418,10 @@ def test_three_player_score_entry(monkeypatch):
     app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
     assert not app.exception
 
-    assert len(app.number_input) == 2  # 3人 − 自動計算1人
-    app.number_input[0].set_value(50000)
-    app.number_input[1].set_value(35000)
-    app = submit(app).click().run()
+    assert len(new_round_inputs(app)) == 2  # 3人 − 自動計算1人
+    new_round_inputs(app)[0].set_value(50000)
+    new_round_inputs(app)[1].set_value(35000)
+    app = click(app, "半荘目を登録").click().run()
 
     assert len(backend.rounds) == 1
     saved = backend.rounds[0]["results"]

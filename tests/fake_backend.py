@@ -248,13 +248,20 @@ def install(monkeypatch, backend: FakeBackend) -> FakeBackend:
     monkeypatch.setattr(games, "delete_round", backend.delete_round)
 
     monkeypatch.setattr(queries, "fetch_entries", lambda scope, value: backend.entries())
+    # 本物の queries._entry と同じ形にすること。table_size / kaze を落とすと
+    # 風別成績や連続記録の不具合がテストをすり抜ける。
     monkeypatch.setattr(
         queries,
         "fetch_rounds_in_order",
         lambda scope, value: [
             [
                 RoundEntry(
-                    player_id=r["player_id"], rank=r["rank"], point=r["point"], tobi=r["tobi"]
+                    player_id=r["player_id"],
+                    rank=r["rank"],
+                    point=r["point"],
+                    tobi=r["tobi"],
+                    table_size=len(rnd["results"]),
+                    kaze=r["kaze"],
                 )
                 for r in rnd["results"]
             ]

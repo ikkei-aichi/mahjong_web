@@ -15,7 +15,7 @@ from mahjong.errors import AppError
 from mahjong.repo import groups as groups_repo
 from mahjong.repo import queries, tournaments as tournaments_repo
 from mahjong.rules import DEFAULT_RULESET
-from mahjong.stats import aggregate, cumulative_series
+from mahjong.stats import aggregate, cumulative_series, head_to_head
 
 ui.show_flashes()
 group = session.require_group()
@@ -149,6 +149,20 @@ bars = (
 st.altair_chart(bars, width="stretch")
 
 
+# --- 対戦相手ごとの相性 -----------------------------------------------------
+
+st.markdown("### 相性")
+st.caption("行の人から見て、列の人と同卓したときの平均着順。低いほど勝てている。")
+
+matrix = []
+for me in played:
+    row = {"": me.name}
+    for opponent in head_to_head(rounds, me.player_id):
+        row[names.get(opponent.player_id, "?")] = round(opponent.my_avg_rank, 2)
+    matrix.append(row)
+st.dataframe(matrix, hide_index=True)
+
+
 # --- 個人別 -----------------------------------------------------------------
 
 st.markdown("### 個人別")
@@ -174,3 +188,8 @@ if selected is not None:
 
     if rules.rate:
         st.metric("収支", ui.format_money(selected.money))
+
+    ui.link_button(
+        f"🧑 {selected.name} さんの詳しい成績", "views/player.py",
+        key="stats_to_player", group=group["group_id"], player=selected.player_id,
+    )

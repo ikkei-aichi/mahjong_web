@@ -39,6 +39,7 @@ pages = [
     st.Page("views/home.py", title="ホーム", icon="🏠", default=has_group, visibility=main),
     st.Page("views/tournaments.py", title="大会", icon="🏆", visibility=main),
     st.Page("views/stats.py", title="成績", icon="📊", visibility=main),
+    st.Page("views/player.py", title="個人成績", icon="🧑", visibility=main),
     st.Page("views/members.py", title="メンバー", icon="👥", visibility=main),
     st.Page("views/settings.py", title="設定", icon="⚙️", visibility=main),
     st.Page(

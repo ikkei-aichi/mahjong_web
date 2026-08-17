@@ -23,6 +23,7 @@ class RoundEntry:
         table_size: その半荘の人数。ラス率の判定に使う。
             0 のときは集計側のルール人数で代用する。3人卓と4人卓が
             混在する大会でも「最下位」を取り違えないために持たせている。
+        kaze: その半荘での風。風別成績の集計に使う。
     """
 
     player_id: str
@@ -30,6 +31,7 @@ class RoundEntry:
     point: int
     tobi: bool = False
     table_size: int = 0
+    kaze: str = ""
 
 
 @dataclass(frozen=True)
@@ -189,3 +191,185 @@ def cumulative_series(
         for pid, values in series.items():
             values.append(values[-1] + gained.get(pid, 0))
     return series
+
+
+# --- 個人の掘り下げ ---------------------------------------------------------
+# ここから下は「1人のプレイヤーを主語にした」分析。
+# 入力はどれも `rounds`（時系列に並んだ半荘のリスト）で、
+# 半荘の中に誰が同卓していたかが分かる形になっている。
+
+
+@dataclass(frozen=True)
+class Opponent:
+    """ある相手と同卓したときの自分の成績。"""
+
+    player_id: str
+    games: int
+    my_avg_rank: float
+    my_total_point: int
+    beat: int  # 相手より上の着順で終えた回数
+
+    @property
+    def beat_rate(self) -> float:
+        return self.beat / self.games if self.games else 0.0
+
+
+@dataclass(frozen=True)
+class KazeStats:
+    """風（席）別の成績。東家が有利かどうかを見るために使う。"""
+
+    kaze: str
+    games: int
+    avg_rank: float
+    avg_point: float
+    total_point: int
+    top_rate: float
+
+
+@dataclass(frozen=True)
+class Streaks:
+    """連続記録。「今3連続トップ中」のような話ができるようにする。"""
+
+    longest_top: int
+    longest_last: int
+    longest_rentai: int
+    current_top: int
+    current_last: int
+
+
+def player_rounds(rounds: list[list[RoundEntry]], player_id: str) -> list[RoundEntry]:
+    """そのプレイヤーが参加した半荘の記録だけを時系列で返す。"""
+    found = []
+    for entries in rounds:
+        for entry in entries:
+            if entry.player_id == player_id:
+                found.append(entry)
+                break
+    return found
+
+
+def head_to_head(rounds: list[list[RoundEntry]], player_id: str) -> list[Opponent]:
+    """相手別の成績。同卓数の多い順に返す。
+
+    「この人と打つと勝てない」が見えるようにするための集計。
+    """
+    games: dict[str, int] = defaultdict(int)
+    rank_sum: dict[str, int] = defaultdict(int)
+    point_sum: dict[str, int] = defaultdict(int)
+    beat: dict[str, int] = defaultdict(int)
+
+    for entries in rounds:
+        me = next((e for e in entries if e.player_id == player_id), None)
+        if me is None:
+            continue
+        for other in entries:
+            if other.player_id == player_id:
+                continue
+            games[other.player_id] += 1
+            rank_sum[other.player_id] += me.rank
+            point_sum[other.player_id] += me.point
+            if me.rank < other.rank:
+                beat[other.player_id] += 1
+
+    result = [
+        Opponent(
+            player_id=pid,
+            games=count,
+            my_avg_rank=rank_sum[pid] / count,
+            my_total_point=point_sum[pid],
+            beat=beat[pid],
+        )
+        for pid, count in games.items()
+    ]
+    result.sort(key=lambda o: (-o.games, o.my_avg_rank))
+    return result
+
+
+def kaze_breakdown(rounds: list[list[RoundEntry]], player_id: str) -> list[KazeStats]:
+    """風別の成績。記録に風が入っていない場合は空を返す。"""
+    from .rules import KAZE_NAMES
+
+    buckets: dict[str, list[RoundEntry]] = defaultdict(list)
+    for entry in player_rounds(rounds, player_id):
+        if entry.kaze:
+            buckets[entry.kaze].append(entry)
+
+    stats = []
+    for kaze in KAZE_NAMES:
+        rows = buckets.get(kaze)
+        if not rows:
+            continue
+        games = len(rows)
+        total = sum(r.point for r in rows)
+        stats.append(
+            KazeStats(
+                kaze=kaze,
+                games=games,
+                avg_rank=sum(r.rank for r in rows) / games,
+                avg_point=total / games,
+                total_point=total,
+                top_rate=sum(1 for r in rows if r.rank == 1) / games,
+            )
+        )
+    return stats
+
+
+def streaks(rounds: list[list[RoundEntry]], player_id: str) -> Streaks:
+    """連続トップ・連続ラス・連続連対の最長と、いま継続中の記録。
+
+    ラスの判定には卓の人数が要る。`table_size` が入っていない記録では
+    その半荘の参加人数で代用する。ここを `entry.rank` で代用してはいけない
+    （`rank == rank` になって**全半荘がラス扱い**になる）。
+    """
+    longest_top = longest_last = longest_rentai = 0
+    run_top = run_last = run_rentai = 0
+
+    for entries in rounds:
+        entry = next((e for e in entries if e.player_id == player_id), None)
+        if entry is None:
+            continue
+        size = entry.table_size or len(entries)
+        last_place = entry.rank == size
+
+        run_top = run_top + 1 if entry.rank == 1 else 0
+        run_last = run_last + 1 if last_place else 0
+        run_rentai = run_rentai + 1 if entry.rank <= 2 else 0
+
+        longest_top = max(longest_top, run_top)
+        longest_last = max(longest_last, run_last)
+        longest_rentai = max(longest_rentai, run_rentai)
+
+    return Streaks(
+        longest_top=longest_top,
+        longest_last=longest_last,
+        longest_rentai=longest_rentai,
+        current_top=run_top,
+        current_last=run_last,
+    )
+
+
+def rank_trend(
+    rounds: list[list[RoundEntry]], player_id: str, window: int = 10
+) -> list[float]:
+    """直近 window 半荘の平均着順の推移。調子の波を見るために使う。
+
+    半荘数が window に満たない間は、そこまでの全半荘の平均を返す
+    （最初だけ極端な値になって読めなくなるのを避ける）。
+    """
+    ranks = [e.rank for e in player_rounds(rounds, player_id)]
+    trend = []
+    for i in range(len(ranks)):
+        chunk = ranks[max(0, i - window + 1) : i + 1]
+        trend.append(sum(chunk) / len(chunk))
+    return trend
+
+
+def point_by_rank(rounds: list[list[RoundEntry]], player_id: str) -> dict[int, float]:
+    """着順ごとの平均ポイント。
+
+    「トップは取れているが、ラスの沈み方が大きい」のような偏りが見える。
+    """
+    buckets: dict[int, list[int]] = defaultdict(list)
+    for entry in player_rounds(rounds, player_id):
+        buckets[entry.rank].append(entry.point)
+    return {rank: sum(points) / len(points) for rank, points in sorted(buckets.items())}
