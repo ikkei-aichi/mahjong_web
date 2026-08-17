@@ -1,234 +1,210 @@
-"""タイトルのルール設定・プレイヤー管理・削除。"""
+"""設定。グループ名、大会のルール、削除。
+
+ルールを変えても過去の記録は自動では変わらない。変えたければ「再計算」を押す。
+再計算は保存済みの持ち点(raw_score)から全半荘を計算し直し、
+**1回のトランザクションでまとめて適用する**。
+
+旧実装は半荘ごとに個別のRPCを呼ぶPythonループで、途中で通信が切れると
+新旧のルールが混在したまま、どれがどちらか判別できない状態になっていた。
+しかも0件成功でも緑の「再計算しました」が出ていた。
+"""
 
 from __future__ import annotations
 
 import streamlit as st
 
-from mahjong import repo, ui
-from mahjong.rules import RuleSet
+from mahjong import session, ui
+from mahjong.errors import AppError
+from mahjong.repo import groups as groups_repo
+from mahjong.repo import queries, tournaments as tournaments_repo
 from mahjong.scoring import ScoringError, calc_round
 
-title_id = ui.require_param(
-    "title", "タイトルが選択されていません。", "views/home.py", "タイトル一覧へ"
-)
-if not title_id:
+ui.show_flashes()
+group = session.require_group()
+is_admin = session.is_admin(group)
+
+st.title("⚙️ 設定")
+
+try:
+    tournaments = tournaments_repo.list_tournaments(group["group_id"])
+except AppError as exc:
+    st.error(str(exc))
     st.stop()
 
-title = repo.get_title(title_id)
-if not title:
-    st.error("タイトルが見つかりません。")
-    if st.button("タイトル一覧へ"):
-        ui.goto("views/home.py")
-    st.stop()
+tab_tournament, tab_group = st.tabs(["大会のルール", "グループ"])
 
-rules = RuleSet.from_dict(title.get("ruleset"))
 
-if st.button("← 対戦一覧へ戻る"):
-    ui.goto("views/game_list.py", title=title_id)
+# --- 大会のルール -----------------------------------------------------------
 
-st.title(f"⚙️ {title['name']} の設定")
+with tab_tournament:
+    if not tournaments:
+        st.info("まだ大会がありません。")
+    else:
+        labels = [t["name"] for t in tournaments]
+        wanted = ui.param("tournament")
+        index = next((i for i, t in enumerate(tournaments) if t["id"] == wanted), 0)
+        chosen = st.selectbox("大会", labels, index=index, key="settings_tournament")
+        tournament = tournaments[labels.index(chosen)]
+        tournament_id = tournament["id"]
 
-tab_rules, tab_players, tab_danger = st.tabs(
-    ["ルール", "プレイヤー", "タイトルの操作"]
-)
+        current_rules, warnings = tournaments_repo.get_ruleset(tournament_id)
+        if warnings:
+            st.warning("保存されているルールに不備があったため補正しました: " + " / ".join(warnings))
 
-# --- ルール -----------------------------------------------------------------
+        st.markdown("#### 大会の情報")
+        # 名前が変わったらキーも変える（未保存の編集が保存済みに見えないように）
+        new_name = st.text_input(
+            "大会名", value=tournament["name"], key=f"tn_{tournament_id}_{tournament['name']}"
+        )
+        new_note = st.text_area(
+            "詳細・メモ",
+            value=tournament.get("note") or "",
+            key=f"tnote_{tournament_id}_{tournament.get('note')}",
+        )
+        if st.button("情報を保存", key="save_info", width="stretch"):
+            try:
+                tournaments_repo.update_tournament(
+                    tournament_id, name=new_name, note=new_note
+                )
+            except AppError as exc:
+                st.error(str(exc))
+            else:
+                ui.flash("大会の情報を保存しました。")
+                st.rerun()
 
-with tab_rules:
-    st.markdown("#### 現在のルール")
-    st.code(ui.ruleset_summary(rules))
+        st.markdown("#### ルール")
+        edited = ui.ruleset_editor(current_rules, key_prefix=f"rules_{tournament_id}")
 
-    st.markdown("#### 変更")
-    new_rules = ui.ruleset_editor(rules, key_prefix=f"rules_{title_id}")
+        st.caption(
+            "保存しただけでは過去の記録は変わりません。"
+            "下の「再計算」を実行すると、保存されている持ち点から全半荘を計算し直します。"
+        )
 
-    st.caption(
-        "保存しただけでは過去の記録は変わりません。"
-        "下の再計算を実行すると、保存されている持ち点から全半荘を計算し直します。"
-    )
+        if st.button(
+            "ルールを保存", type="primary", key="save_rules",
+            width="stretch", disabled=edited is None,
+        ):
+            try:
+                tournaments_repo.update_tournament(tournament_id, rules=edited)
+            except AppError as exc:
+                st.error(str(exc))
+            else:
+                ui.flash("ルールを保存しました。過去の記録に反映するには再計算してください。")
+                st.rerun()
 
-    if st.button("ルールを保存", type="primary", use_container_width=True):
+        # --- 再計算 ---
+        st.markdown("#### 過去の記録を再計算")
+
         try:
-            repo.update_ruleset(title_id, new_rules)
-        except repo.RepoError as exc:
+            stored = queries.fetch_stored_rounds_for_recalc(tournament_id)
+        except AppError as exc:
             st.error(str(exc))
+            stored = []
+
+        if not stored:
+            st.caption("再計算できる記録がありません。")
         else:
-            st.success("保存しました。")
-            st.rerun()
-
-    st.divider()
-    st.markdown("#### 過去のデータを再計算")
-    st.caption(
-        "入力された持ち点を保存しているため、ウマや返し点を変えても"
-        "過去の全半荘をやり直せます。"
-    )
-
-    stored = repo.fetch_stored_rounds_for_recalc(title_id)
-    st.write(f"対象: {len(stored)} 半荘")
-
-    if stored and st.button("現在のルールで再計算する", use_container_width=True):
-        mismatched = [r for r in stored if len(r["raw_scores"]) != rules.player_count]
-        if mismatched:
-            st.error(
-                f"{len(mismatched)} 件の半荘が人数と合いません"
-                f"（ルールは{rules.player_count}人）。先にルールの人数を合わせてください。"
+            mismatched = [r for r in stored if len(r["seats"]) != current_rules.player_count]
+            st.caption(
+                f"対象: {len(stored)}半荘"
+                + (f"（うち人数がルールと違うもの {len(mismatched)}件）" if mismatched else "")
             )
-        else:
-            updated = 0
-            failed: list[str] = []
-            progress = st.progress(0.0)
-            for index, rnd in enumerate(stored, start=1):
-                try:
-                    results = calc_round(
-                        rnd["raw_scores"], rnd["kazes"], rules, seats=rnd["seats"]
-                    )
-                    seat_to_player = dict(zip(rnd["seats"], rnd["player_ids"]))
-                    repo.update_round(rnd["round_id"], results, seat_to_player)
-                    updated += 1
-                except (ScoringError, repo.RepoError) as exc:
-                    failed.append(str(exc))
-                progress.progress(index / len(stored))
-
-            if failed:
-                st.error(f"{len(failed)} 件で失敗しました: {failed[0]}")
-            st.success(f"{updated} 半荘を再計算しました。")
-
-# --- プレイヤー -------------------------------------------------------------
-
-with tab_players:
-    players = repo.list_players(title_id)
-
-    st.markdown("#### プレイヤーを追加")
-    new_name = st.text_input("名前", key=f"add_player_{title_id}")
-    if st.button("追加", use_container_width=True):
-        try:
-            repo.create_player(title_id, new_name)
-        except repo.RepoError as exc:
-            st.error(str(exc))
-        else:
-            st.success("追加しました。")
-            st.rerun()
-
-    st.divider()
-    st.markdown("#### 登録済みプレイヤー")
-
-    if not players:
-        st.info("まだプレイヤーがいません。")
-
-    for player in players:
-        with st.container(border=True):
-            col_name, col_save, col_del = st.columns([3, 1, 1])
-            with col_name:
-                edited = st.text_input(
-                    "名前",
-                    value=player["name"],
-                    key=f"pname_{player['id']}",
-                    label_visibility="collapsed",
-                )
-            with col_save:
-                if st.button("保存", key=f"psave_{player['id']}", use_container_width=True):
-                    try:
-                        repo.rename_player(player["id"], edited)
-                    except repo.RepoError as exc:
-                        st.error(str(exc))
-                    else:
-                        st.rerun()
-            with col_del:
-                if st.button("削除", key=f"pdel_{player['id']}", use_container_width=True):
-                    st.session_state["pending_delete_player"] = player["id"]
-
-            if st.session_state.get("pending_delete_player") == player["id"]:
+            if mismatched:
                 st.warning(
-                    f"「{player['name']}」を削除します。"
-                    "過去の成績は残りますが、新しい対戦では選べなくなります。"
+                    f"{len(mismatched)}件の半荘が{current_rules.player_count}人用ルールと"
+                    "人数が合わないため再計算できません。先にルールの人数を直してください。"
                 )
-                col_yes, col_no = st.columns(2)
-                with col_yes:
-                    if st.button(
-                        "削除する", key=f"pyes_{player['id']}", type="primary",
-                        use_container_width=True,
-                    ):
-                        try:
-                            repo.delete_player(player["id"])
-                        except repo.RepoError as exc:
-                            st.error(str(exc))
-                        else:
-                            st.session_state.pop("pending_delete_player", None)
-                            st.rerun()
-                with col_no:
-                    if st.button(
-                        "やめる", key=f"pno_{player['id']}", use_container_width=True
-                    ):
-                        st.session_state.pop("pending_delete_player", None)
-                        st.rerun()
 
-# --- タイトルの操作 ---------------------------------------------------------
-
-with tab_danger:
-    st.markdown("#### タイトル名の変更")
-    renamed = st.text_input("タイトル名", value=title["name"], key=f"tname_{title_id}")
-    if st.button("名前を保存", use_container_width=True):
-        try:
-            repo.rename_title(title_id, renamed)
-        except repo.RepoError as exc:
-            st.error(str(exc))
-        else:
-            st.success("保存しました。")
-            st.rerun()
-
-    st.divider()
-    st.markdown("#### 対戦の削除")
-
-    games = repo.list_games(title_id)
-    if not games:
-        st.caption("削除できる対戦はありません。")
-    for game in games:
-        col_name, col_del = st.columns([3, 1])
-        with col_name:
-            st.write(f"**{game['name']}**　({game['round_count']}半荘)")
-        with col_del:
-            if st.button("削除", key=f"gdel_{game['id']}", use_container_width=True):
-                st.session_state["pending_delete_game"] = game["id"]
-
-        if st.session_state.get("pending_delete_game") == game["id"]:
-            st.warning(f"「{game['name']}」を削除します。成績から除外されます。")
-            col_yes, col_no = st.columns(2)
-            with col_yes:
-                if st.button(
-                    "削除する", key=f"gyes_{game['id']}", type="primary",
-                    use_container_width=True,
-                ):
+            if st.button(
+                "保存済みのルールで再計算する", key="recalc",
+                width="stretch", disabled=bool(mismatched),
+            ):
+                calculated = []
+                failures: list[str] = []
+                for rnd in stored:
                     try:
-                        repo.delete_game(game["id"])
-                    except repo.RepoError as exc:
+                        results = calc_round(
+                            rnd["raw_scores"],
+                            rnd["kazes"],
+                            current_rules,
+                            seats=rnd["seats"],
+                            # 保存済みの記録には供託で合計が合わないものが混ざりうる。
+                            # ここで弾くと過去データを再計算できなくなる。
+                            strict=False,
+                        )
+                    except ScoringError as exc:
+                        failures.append(str(exc))
+                        continue
+                    calculated.append(
+                        (rnd["round_id"], results, dict(zip(rnd["seats"], rnd["player_ids"])))
+                    )
+
+                if failures:
+                    st.error(f"{len(failures)}件を計算できませんでした: {failures[0]}")
+                elif not calculated:
+                    st.warning("再計算できる半荘がありませんでした。")
+                else:
+                    try:
+                        applied = queries.apply_recalculated_rounds(
+                            tournament_id, current_rules, calculated
+                        )
+                    except AppError as exc:
                         st.error(str(exc))
                     else:
-                        st.session_state.pop("pending_delete_game", None)
+                        ui.flash(f"{applied}半荘を再計算しました。")
                         st.rerun()
-            with col_no:
-                if st.button("やめる", key=f"gno_{game['id']}", use_container_width=True):
-                    st.session_state.pop("pending_delete_game", None)
-                    st.rerun()
 
-    st.divider()
-    st.markdown("#### タイトルの削除")
-    st.caption("一覧から消えます。データ自体は残るため、必要なら復元を依頼できます。")
-
-    if st.button("このタイトルを削除", use_container_width=True):
-        st.session_state["pending_delete_title"] = title_id
-
-    if st.session_state.get("pending_delete_title") == title_id:
-        st.error(f"「{title['name']}」を削除します。よろしいですか？")
-        col_yes, col_no = st.columns(2)
-        with col_yes:
-            if st.button("削除する", type="primary", use_container_width=True):
+        # --- 大会の削除 ---
+        if is_admin:
+            st.markdown("#### 大会の削除")
+            if ui.confirm_delete(
+                f"tournament_{tournament_id}",
+                "🗑️ この大会を削除",
+                f"「{tournament['name']}」を削除します。"
+                "開催日・対戦・成績もすべて表示されなくなります。"
+                "データベースには残るので、必要なら復元を依頼できます。",
+                danger=True,
+            ):
                 try:
-                    repo.delete_title(title_id)
-                except repo.RepoError as exc:
+                    tournaments_repo.delete_tournament(tournament_id)
+                except AppError as exc:
                     st.error(str(exc))
                 else:
-                    st.session_state.pop("pending_delete_title", None)
-                    ui.goto("views/home.py")
-        with col_no:
-            if st.button("やめる", use_container_width=True):
-                st.session_state.pop("pending_delete_title", None)
+                    ui.flash("大会を削除しました。")
+                    ui.nav("views/tournaments.py", group=group["group_id"])
+
+
+# --- グループ ---------------------------------------------------------------
+
+with tab_group:
+    if not is_admin:
+        st.info("グループの設定を変更できるのは管理者だけです。")
+    else:
+        try:
+            detail = groups_repo.get_group(group["group_id"]) or {}
+        except AppError as exc:
+            st.error(str(exc))
+            detail = {}
+
+        name = st.text_input(
+            "グループ名", value=detail.get("name", group["name"]),
+            key=f"gname_{detail.get('name')}",
+        )
+        description = st.text_area(
+            "説明", value=detail.get("description") or "",
+            key=f"gdesc_{detail.get('description')}",
+        )
+        if st.button("保存", type="primary", key="save_group", width="stretch"):
+            try:
+                groups_repo.update_group(group["group_id"], name=name, description=description)
+            except AppError as exc:
+                st.error(str(exc))
+            else:
+                ui.flash("グループの設定を保存しました。")
                 st.rerun()
+
+    st.markdown("#### 別のグループ")
+    ui.link_button(
+        "グループを作る／招待コードで参加する", "views/onboarding.py",
+        key="settings_onboarding",
+    )

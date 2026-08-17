@@ -14,16 +14,23 @@ RLS を有効にしたため、ログインしないとデータを一切読み�
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import streamlit as st
 
-from .db import ConfigError, get_client
+from .db import ConfigError, get_client, reset_client
+from .errors import is_network_error, describe
 
 # Cookie 名と保持期間。長すぎるとトークン流出時の危険が増すため2週間にする。
 _COOKIE_NAME = "mahjong_refresh_token"
 _COOKIE_DAYS = 14
+
+# アクセストークンの残り寿命がこれを切ったら先回りして更新する。
+# supabase-py の自動更新スレッドはブラウザセッションごとに増えてしまうので
+# db.py で無効化しており、代わりにここで更新する。
+_REFRESH_MARGIN_SECONDS = 120
 
 
 class AuthError(RuntimeError):
@@ -105,16 +112,53 @@ def _read_token() -> str | None:
         return None
 
 
+def _refresh_if_expiring(client) -> bool:
+    """アクセストークンの期限が近ければ更新する。
+
+    db.py で自動更新を切っているため、ここが唯一の更新経路。
+    更新しないまま1時間ほど使い続けると PostgREST が 401 を返し始める。
+
+    Returns:
+        セッションが有効（更新済みを含む）なら True。
+    """
+    try:
+        session = client.auth.get_session()
+    except Exception:
+        return False
+    if session is None:
+        return False
+
+    expires_at = getattr(session, "expires_at", None)
+    if expires_at is None or expires_at - time.time() > _REFRESH_MARGIN_SECONDS:
+        return True
+
+    try:
+        refreshed = client.auth.refresh_session().session
+    except Exception:
+        return False
+    if refreshed is None:
+        return False
+    # ローテーションされた refresh token を Cookie に反映する
+    _save_token(refreshed.refresh_token)
+    return True
+
+
 def current_user() -> dict[str, Any] | None:
     """ログイン中のユーザーを返す。未ログインなら None。
 
     session_state にセッションが無い場合は Cookie の refresh token から
     復元を試みる（リロード対策）。
-    """
-    if st.session_state.get("auth_user"):
-        return st.session_state["auth_user"]
 
+    クライアントはブラウザセッション専用（db.get_client 参照）なので、
+    ここで得られるセッションは必ず「この画面を見ている本人」のもの。
+    """
     client = get_client()
+
+    if st.session_state.get("auth_user"):
+        if _refresh_if_expiring(client):
+            return st.session_state["auth_user"]
+        # セッションが失効した。Cookie からの復元をこの下で試みる。
+        st.session_state.pop("auth_user", None)
 
     try:
         session = client.auth.get_session()
@@ -196,12 +240,32 @@ def sign_out() -> None:
         pass
     st.session_state.pop("auth_user", None)
     _clear_token()
+    # クライアントごと捨てて、内部に残ったトークンを確実に消す。
+    # このクライアントはこのブラウザセッション専用なので、他の利用者に影響しない。
+    reset_client()
 
 
 def _friendly(exc: Exception) -> str:
     """Supabase のエラーを日本語の短い説明に変換する。"""
+    # 圏外・DNS失敗・タイムアウトは errors 側の判定に任せる。
+    # ここを通さないと「[Errno 11001] getaddrinfo failed」がそのまま画面に出る。
+    if is_network_error(exc):
+        return str(describe(exc))
+
     message = str(getattr(exc, "message", None) or exc)
     lowered = message.lower()
+    if "signups are disabled" in lowered or "signup is disabled" in lowered:
+        return (
+            "このプロジェクトではメールアドレスでの登録が無効になっています。\n"
+            "Supabase ダッシュボード → Authentication → Sign In / Providers から "
+            "「Email」を有効にしてください。"
+        )
+    if "email logins are disabled" in lowered or "email provider" in lowered:
+        return (
+            "このプロジェクトではメールアドレスでのログインが無効になっています。\n"
+            "Supabase ダッシュボード → Authentication → Sign In / Providers から "
+            "「Email」を有効にしてください。"
+        )
     if "invalid login credentials" in lowered:
         return "メールアドレスまたはパスワードが違います。"
     if "already registered" in lowered or "already been registered" in lowered:

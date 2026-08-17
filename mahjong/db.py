@@ -5,7 +5,23 @@ HTTP/HTTPS 以外の外向き通信を遮断していたため REST API 方式�
 すべての通信が 443 番で完結するので、社内ネットワークや公衆Wi-Fiでも動く。
 
 副次的な効果として RLS が実際に適用されるようになった。そのため
-**ログインしていないとデータを読み書きできない**（002_views_rls_rpc.sql 参照）。
+**ログインしていないとデータを読み書きできない**。
+
+## クライアントは必ずブラウザセッションごとに作る
+
+旧実装は `st.cache_resource` とモジュールグローバルで
+Supabase クライアントを1個だけ作り、プロセス全体で共有していた。
+supabase-py はログインセッション(JWT)をクライアント内部に保持するため、
+これは「サーバー全体で JWT が1個」という意味になり、次の事故が起きていた:
+
+    * B さんがログインすると、A さんのリクエストまで B の JWT で飛ぶ
+    * B さんがログアウトすると A さんも巻き添えでログアウトする
+    * Cookie も session_state も持たない新規訪問者が、
+      直前にログインした人として自動ログインされる
+
+その結果「同じログイン情報を共有しないと運用できない」状態になっていた。
+グループ単位の RLS を入れると、これは「他人のデータを他人の権限で
+読み書きする」に直結するため、**セッション分離は RLS より先に必要**。
 
 設定の解決順:
     1. 環境変数 SUPABASE_URL / SUPABASE_KEY
@@ -15,18 +31,35 @@ HTTP/HTTPS 以外の外向き通信を遮断していたため REST API 方式�
 from __future__ import annotations
 
 import os
-from typing import Any
 
-from supabase import Client, create_client
+from supabase import Client, ClientOptions, create_client
 
 ENV_URL = "SUPABASE_URL"
 ENV_KEY = "SUPABASE_KEY"
 
-_client: Client | None = None
+# st.session_state に置くキー。ブラウザセッション1つにつきクライアント1つ。
+SESSION_CLIENT_KEY = "_supabase_client"
+
+# Streamlit の外（pytest / CLI）で使うときだけのフォールバック
+_fallback_client: Client | None = None
 
 
 class ConfigError(RuntimeError):
     """接続設定が見つからない・不正なときに送出する。"""
+
+
+def _session_state():
+    """Streamlit の session_state。スクリプト実行文脈の外では None。"""
+    try:
+        import streamlit as st
+    except ModuleNotFoundError:
+        return None
+    try:
+        # ScriptRunContext が無いと session_state の参照は例外になる
+        st.session_state  # noqa: B018 - 存在確認のための参照
+    except Exception:
+        return None
+    return st.session_state
 
 
 def _from_streamlit_secrets() -> tuple[str | None, str | None]:
@@ -71,51 +104,45 @@ def get_config() -> tuple[str, str]:
     return url, key
 
 
+def _new_client() -> Client:
+    url, key = get_config()
+    return create_client(
+        url,
+        key,
+        options=ClientOptions(
+            # 自動更新スレッドはブラウザセッションごとに増えてしまうので使わない。
+            # 代わりに auth.current_user() が期限切れ前に明示的に更新する。
+            auto_refresh_token=False,
+            # 保存先は既定のインメモリ（クライアントインスタンス固有）。
+            # これによりセッション間でトークンが混ざらない。
+            persist_session=True,
+        ),
+    )
+
+
 def get_client() -> Client:
-    """プロセス内で共有する Supabase クライアントを返す。
+    """このブラウザセッション専用の Supabase クライアントを返す。
 
-    Streamlit 上では st.cache_resource に載せ、再描画のたびに
-    クライアントを作り直さないようにする。
+    Streamlit の外（テストや CLI）ではプロセス内で1つを使い回す。
     """
-    global _client
-    if _client is not None:
-        return _client
+    state = _session_state()
+    if state is None:
+        global _fallback_client
+        if _fallback_client is None:
+            _fallback_client = _new_client()
+        return _fallback_client
 
-    try:
-        import streamlit as st
-    except ModuleNotFoundError:
-        url, key = get_config()
-        _client = create_client(url, key)
-        return _client
-
-    @st.cache_resource(show_spinner=False)
-    def _cached() -> Client:
-        url, key = get_config()
-        return create_client(url, key)
-
-    _client = _cached()
-    return _client
+    client = state.get(SESSION_CLIENT_KEY)
+    if client is None:
+        client = _new_client()
+        state[SESSION_CLIENT_KEY] = client
+    return client
 
 
 def reset_client() -> None:
-    """キャッシュしたクライアントを破棄する（設定変更後やテスト用）。"""
-    global _client
-    _client = None
-
-
-def check_connection() -> dict[str, Any]:
-    """接続確認。認証不要のヘルスチェックとして auth 設定を叩く。
-
-    Returns:
-        {"reachable": bool, "authenticated": bool, "detail": str}
-    """
-    client = get_client()
-    result: dict[str, Any] = {"reachable": False, "authenticated": False, "detail": ""}
-    try:
-        session = client.auth.get_session()
-        result["reachable"] = True
-        result["authenticated"] = session is not None
-        result["detail"] = "ログイン済み" if session else "未ログイン"
-    except Exception as exc:  # noqa: BLE001 - 呼び出し側に理由を見せたい
-        result["detail"] = f"{type(exc).__name__}: {exc}"
-    return result
+    """このセッションのクライアントを破棄する（設定変更後やテスト用）。"""
+    global _fallback_client
+    _fallback_client = None
+    state = _session_state()
+    if state is not None:
+        state.pop(SESSION_CLIENT_KEY, None)

@@ -1,62 +1,106 @@
-"""タイトル（対戦グループ・大会）の一覧と作成。"""
+"""ホーム。自分の直近の成績と、いちばんよく使う導線をまとめる。
+
+「前回の続きを入力する」を最上段に置く。このアプリで最も回数の多い操作は
+新規作成ではなく、進行中の卓にもう1半荘足すことなので。
+"""
 
 from __future__ import annotations
 
 import streamlit as st
 
-from mahjong import repo, ui
-from mahjong.rules import RuleSet
+from mahjong import session, ui
+from mahjong.errors import AppError
+from mahjong.repo import games as games_repo
+from mahjong.repo import groups as groups_repo
+from mahjong.repo import queries, tournaments as tournaments_repo
+from mahjong.stats import aggregate
 from mahjong.timeutil import format_jst
 
-st.title("🀄 麻雀管理アプリ")
-st.markdown("対戦グループや大会ごとにタイトルを作成して管理します。")
+ui.show_flashes()
+group = session.require_group()
+session.provisional_notice(group)
 
-# --- 新規作成 ---------------------------------------------------------------
-
-with st.expander("🆕 新しいタイトルを作る", expanded=False):
-    name = st.text_input("タイトル名", placeholder="例：2026年 正月大会", key="new_title_name")
-
-    st.markdown("##### ルール設定")
-    st.caption("あとから変更できます。変更しても過去のデータは持ち点から再計算できます。")
-    rules = ui.ruleset_editor(RuleSet(), key_prefix="new_title")
-
-    if st.button("このルールで作成", type="primary", use_container_width=True):
-        try:
-            title_id = repo.create_title(name, rules, owner_id=st.session_state["auth_user"]["id"])
-        except repo.RepoError as exc:
-            st.error(str(exc))
-        else:
-            ui.goto("views/game_list.py", title=title_id)
-
-st.divider()
-
-# --- 一覧 -------------------------------------------------------------------
-
-st.markdown("### 登録済みタイトル")
+st.title(f"🀄 {group['name']}")
 
 try:
-    titles = repo.list_titles()
-except repo.RepoError as exc:
-    st.error(f"タイトルを取得できませんでした: {exc}")
+    tournaments = tournaments_repo.list_tournaments(group["group_id"])
+except AppError as exc:
+    st.error(str(exc))
     st.stop()
 
-if not titles:
-    st.info("まだタイトルがありません。上のフォームから作成してください。")
+if not tournaments:
+    st.info("まだ大会がありません。大会を作るところから始めましょう。")
+    ui.link_button(
+        "🏆 大会を作る", "views/tournaments.py", key="home_new_tournament",
+        primary=True, group=group["group_id"],
+    )
     st.stop()
 
-for row in titles:
-    rules = RuleSet.from_dict(row.get("ruleset"))
+
+# --- 続きを入力 -------------------------------------------------------------
+# 直近に対戦が行われた開催日を探して、そこへの導線を最上段に出す。
+
+latest = tournaments[0]
+try:
+    recent_games = games_repo.list_games_in_tournament(latest["id"])
+except AppError as exc:
+    st.error(str(exc))
+    recent_games = []
+
+if recent_games:
+    game = recent_games[0]
+    names = "、".join(s["player_name"] for s in game["seats"])
+    st.markdown("### ▶️ 続きを入力")
     with st.container(border=True):
-        st.subheader(row["name"])
-        st.caption(f"📅 {format_jst(row['created_at'])}　|　{ui.ruleset_summary(rules)}")
+        st.markdown(f"**{latest['name']}** ・ {game.get('held_on') or ''}")
+        st.caption(f"{game['name']} ／ {names} ／ {game['round_count']}半荘")
+        ui.link_button(
+            "この卓にスコアを入力", "views/game.py", key="home_continue",
+            primary=True, group=group["group_id"], game=game["id"],
+        )
 
-        col_open, col_stats, col_settings = st.columns(3)
-        with col_open:
-            if st.button("▶ 開く", key=f"open_{row['id']}", use_container_width=True):
-                ui.goto("views/game_list.py", title=row["id"])
-        with col_stats:
-            if st.button("📊 成績", key=f"stats_{row['id']}", use_container_width=True):
-                ui.goto("views/stats.py", title=row["id"])
-        with col_settings:
-            if st.button("⚙️ 設定", key=f"cfg_{row['id']}", use_container_width=True):
-                ui.goto("views/settings.py", title=row["id"])
+
+# --- 自分の成績 -------------------------------------------------------------
+
+st.markdown("### 📊 このグループの通算成績")
+try:
+    entries = queries.fetch_entries("group_id", group["group_id"])
+    names = groups_repo.player_names(group["group_id"])
+except AppError as exc:
+    st.error(str(exc))
+    st.stop()
+
+if not entries:
+    st.info("まだ対戦記録がありません。")
+else:
+    # 通算表示なので、レートは直近の大会のものを借りる（金額列の有無だけに使う）
+    rules, _ = tournaments_repo.get_ruleset(latest["id"])
+    stats = aggregate(entries, names, rules)
+    me = next((s for s in stats if s.player_id == group.get("my_player_id")), None)
+    if me and me.games:
+        col1, col2, col3 = st.columns(3)
+        col1.metric("半荘", me.games)
+        col2.metric("合計", ui.format_point(me.total_point))
+        col3.metric("平均順位", f"{me.avg_rank:.2f}")
+    ui.stats_table(stats, rules, key="home_stats")
+
+    st.caption(f"全 {queries.count_rounds('group_id', group['group_id'])} 半荘")
+
+
+# --- 大会一覧（抜粋） -------------------------------------------------------
+
+st.markdown("### 🏆 大会")
+for tournament in tournaments[:5]:
+    with st.container(border=True):
+        st.markdown(f"**{tournament['name']}**")
+        st.caption(f"作成 {format_jst(tournament['created_at'], '%Y/%m/%d')}")
+        ui.link_button(
+            "開く", "views/tournament.py", key=f"home_t_{tournament['id']}",
+            group=group["group_id"], tournament=tournament["id"],
+        )
+
+if len(tournaments) > 5:
+    ui.link_button(
+        f"すべての大会を見る（{len(tournaments)}件）", "views/tournaments.py",
+        key="home_all_tournaments", group=group["group_id"],
+    )

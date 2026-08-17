@@ -18,6 +18,7 @@ from mahjong.scoring import (
     ScoringError,
     calc_round,
     determine_ranks,
+    effective_oka,
     recalculate,
     round_to_point,
     validate_total,
@@ -84,11 +85,38 @@ def test_shisha_gonyu(diff, expected):
     assert round_to_point(diff, ROUND_SHISHA_GONYU) == expected
 
 
-def test_ceil_and_floor_modes():
+def test_ceil_and_floor_round_by_magnitude_not_toward_infinity():
+    """麻雀の「切り上げ／切り捨て」は絶対値に対する操作。
+
+    旧実装は ±∞方向（数学的な ceil/floor）で丸めており、
+    正の値と負の値で挙動が食い違っていた。-0.4 は「切り上げ」なら
+    -1（大きさを繰り上げる）であって 0 ではない。
+    """
     assert round_to_point(400, ROUND_CEIL) == 1
-    assert round_to_point(-400, ROUND_CEIL) == 0
+    assert round_to_point(-400, ROUND_CEIL) == -1
     assert round_to_point(400, ROUND_FLOOR) == 0
-    assert round_to_point(-400, ROUND_FLOOR) == -1
+    assert round_to_point(-400, ROUND_FLOOR) == 0
+    # ちょうど1000の倍数は切り上げでも動かない
+    assert round_to_point(2000, ROUND_CEIL) == 2
+    assert round_to_point(-2000, ROUND_CEIL) == -2
+    assert round_to_point(-2000, ROUND_FLOOR) == -2
+
+
+@pytest.mark.parametrize("mode", [ROUND_CEIL, ROUND_FLOOR, ROUND_SHISHA_GONYU])
+def test_all_round_modes_are_symmetric_around_zero(mode):
+    """どの方式も符号に対して対称。ここが崩れると同じ卓で有利不利が生まれる。"""
+    for diff in range(-60000, 60001, 100):
+        assert round_to_point(diff, mode) == -round_to_point(-diff, mode)
+
+
+def test_ceil_mode_keeps_zero_sum_in_calc_round():
+    """端数処理を変えてもゼロサムは崩れない（トップ調整方式の性質）。"""
+    for mode in (ROUND_CEIL, ROUND_FLOOR, ROUND_SHISHA_GONYU):
+        rules = RuleSet(uma=(10, 5, -5, -10), round_mode=mode)
+        results = calc_round(
+            [40000, 30400, 25000, 4600], ["東", "南", "西", "北"], rules
+        )
+        assert sum(r.point for r in results) == 0
 
 
 def test_unknown_round_mode_is_rejected():
@@ -271,6 +299,55 @@ def test_validate_total_flags_mismatch():
 def test_validate_total_for_three_player():
     ok, expected, _ = validate_total([40000, 35000, 30000], PRESETS_3P["三人麻雀 ウマなし"])
     assert ok and expected == 105000
+
+
+def test_calc_round_rejects_wrong_total_by_default():
+    """旧実装は警告だけで保存でき、足りない分がまるごとトップの得点になっていた。"""
+    with pytest.raises(ScoringError) as exc:
+        calc_round([40000, 30000, 20000, 5000], ["東", "南", "西", "北"], NO_UMA)
+    assert "95,000" in str(exc.value)
+
+
+def test_calc_round_allows_wrong_total_when_not_strict():
+    """供託が残る卓や、保存済みデータの再計算では通す。"""
+    results = calc_round(
+        [40000, 30000, 20000, 5000], ["東", "南", "西", "北"], NO_UMA, strict=False
+    )
+    assert sum(r.point for r in results) == 0
+
+
+# --- 飛び -------------------------------------------------------------------
+
+
+def test_tobi_at_exactly_zero_is_configurable():
+    """持ち点ちょうど0はハコとみなす流儀がある。旧実装は score < 0 固定だった。"""
+    scores = [60000, 25000, 15000, 0]
+    kazes = ["東", "南", "西", "北"]
+
+    strict_rules = RuleSet(uma=(0, 0, 0, 0), tobi_bonus=10, tobi_includes_zero=False)
+    assert [r.tobi for r in calc_round(scores, kazes, strict_rules)] == [False] * 4
+
+    hako_rules = RuleSet(uma=(0, 0, 0, 0), tobi_bonus=10, tobi_includes_zero=True)
+    results = calc_round(scores, kazes, hako_rules)
+    assert [r.tobi for r in results] == [False, False, False, True]
+    assert sum(r.point for r in results) == 0
+
+
+# --- オカ -------------------------------------------------------------------
+
+
+def test_effective_oka_matches_actual_payout():
+    """返し点差が1000の倍数でないとき、名目オカと実効オカがずれる。"""
+    assert effective_oka(NO_UMA) == NO_UMA.oka == 20
+
+    odd = RuleSet(uma=(0, 0, 0, 0), return_score=30250)
+    assert odd.oka == 21  # 名目値
+    assert effective_oka(odd) == 20  # 実際にトップへ渡る額
+
+    # 全員が原点なら「トップの点 = 実効オカ - 自分の素点マイナス」になる
+    results = calc_round([25000] * 4, ["東", "南", "西", "北"], odd)
+    per_seat = results[1].point
+    assert results[0].point == effective_oka(odd) + per_seat
 
 
 # --- 再計算 -----------------------------------------------------------------

@@ -192,3 +192,63 @@ def test_out_of_range_rank_does_not_crash_aggregation():
     assert stats["a"].games == 2
     assert stats["a"].total_point == 30
     assert stats["a"].rank_counts == (1, 0, 0, 0)
+
+
+# --- 名簿に無いプレイヤー（削除済み） ---------------------------------------
+
+
+def test_player_missing_from_roster_is_still_counted():
+    """プレイヤーを削除しても順位表の合計はゼロサムのまま。
+
+    旧実装は名簿(players)に無い player_id を無言で捨てていたため、
+    削除したプレイヤーの記録だけが消えて合計が0にならなくなっていた。
+    画面には「過去の成績は残ります」と書いてあり、説明とも矛盾していた。
+    """
+    entries = make_round(
+        [("a", 1, 30), ("b", 2, 0), ("c", 3, -10), ("d", 4, -20)]
+    )
+    # d を名簿から外す（＝論理削除された状態）
+    stats = aggregate(entries, {"a": "アキラ", "b": "ボブ", "c": "チカ"}, NO_UMA)
+
+    assert sum(s.total_point for s in stats) == 0
+    assert {s.player_id for s in stats} == {"a", "b", "c", "d"}
+    assert by_id(stats)["d"].total_point == -20
+
+
+def test_cumulative_series_includes_players_missing_from_roster():
+    rounds = [make_round([("a", 1, 30), ("b", 2, 0), ("c", 3, -10), ("d", 4, -20)])]
+    series = cumulative_series(rounds, {"a": "アキラ"})
+    assert set(series) == {"a", "b", "c", "d"}
+    assert all(len(v) == len(rounds) + 1 for v in series.values())
+    assert series["d"] == [0, -20]
+
+
+# --- 人数設定を変えても過去が壊れない ---------------------------------------
+
+
+def test_switching_to_three_player_keeps_fourth_place_records():
+    """4人打ちの大会を3人設定に変えても、4着の記録が消えない。
+
+    旧実装は rank_counts の幅を現在のルール人数で決めていたため、
+    4着が集計から抜け落ちて「ラス率0%」と表示されていた。
+    """
+    entries = [
+        RoundEntry("a", rank=4, point=-20, table_size=4),
+        RoundEntry("a", rank=1, point=30, table_size=4),
+    ]
+    three = PRESETS_3P["三人麻雀 ウマなし"]
+    stats = by_id(aggregate(entries, {"a": "アキラ"}, three))["a"]
+
+    assert stats.rank_counts == (1, 0, 0, 1)
+    assert sum(stats.rank_counts) == stats.games
+    assert stats.last_rate == 0.5
+
+
+def test_last_rate_uses_table_size_for_mixed_arity():
+    """3人卓と4人卓が混ざる大会でも「最下位」を取り違えない。"""
+    entries = [
+        RoundEntry("a", rank=3, point=-10, table_size=3),  # 3人卓のラス
+        RoundEntry("a", rank=3, point=-10, table_size=4),  # 4人卓の3着（ラスではない）
+    ]
+    stats = by_id(aggregate(entries, {"a": "アキラ"}, NO_UMA))["a"]
+    assert stats.last_rate == 0.5

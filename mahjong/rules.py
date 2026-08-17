@@ -41,6 +41,8 @@ class RuleSet:
             人数分だけトップに加算される（＝オカ）。
         uma: 順位点。index 0 が1位。長さは player_count と一致させる。
         tobi_bonus: 飛び賞。飛んだ人からトップへ移動する点数（0で無効）。
+        tobi_includes_zero: 持ち点ちょうど0を飛びに含めるか。
+            多くのハウスルールでは0点はハコ（飛び）扱いだが、含めない流儀もある。
         round_mode: 素点の端数処理方式。
         rate: 1ptあたりの金額（円）。0なら金額計算を表示しない。
     """
@@ -50,6 +52,7 @@ class RuleSet:
     return_score: int = 30000
     uma: tuple[int, ...] = (10, 5, -5, -10)
     tobi_bonus: int = 0
+    tobi_includes_zero: bool = False
     round_mode: str = ROUND_GOSHA_ROKUNYU
     rate: int = 0
 
@@ -66,6 +69,14 @@ class RuleSet:
             raise RuleError("返し点は配給原点以上である必要があります。")
         if self.tobi_bonus < 0:
             raise RuleError("飛び賞に負の値は指定できません。")
+        # ウマの合計が0でないと、1位のウマは計算に反映されない。
+        # 計算方式（トップは2位以下の合計の反転）の都合で、トップの実効ウマは
+        # 常に -(2位以下のウマの合計) になるため。ここで弾いて設定ミスを防ぐ。
+        if sum(self.uma) != 0:
+            raise RuleError(
+                f"ウマの合計は0にしてください（現在{sum(self.uma):+d}）。"
+                "合計が0でないと1位のウマが無視されます。"
+            )
 
     @property
     def total_score(self) -> int:
@@ -74,12 +85,16 @@ class RuleSet:
 
     @property
     def oka(self) -> int:
-        """トップが得るオカ（pt）。返し点と配給原点の差の合計。"""
+        """トップが得るオカ（pt）の名目値。返し点と配給原点の差の合計。
+
+        端数処理を通した**実効値**は `scoring.effective_oka()` を使うこと。
+        返し点と配給原点の差が1000の倍数でないとき、この名目値と実効値はずれる。
+        """
         return (self.return_score - self.start_score) * self.player_count // 1000
 
     @property
     def uma_is_zero_sum(self) -> bool:
-        """ウマの合計が0か。0でない分はトップが吸収する。"""
+        """ウマの合計が0か。__post_init__ で保証されるので常に True。"""
         return sum(self.uma) == 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -89,6 +104,7 @@ class RuleSet:
             "return_score": self.return_score,
             "uma": list(self.uma),
             "tobi_bonus": self.tobi_bonus,
+            "tobi_includes_zero": self.tobi_includes_zero,
             "round_mode": self.round_mode,
             "rate": self.rate,
         }
@@ -98,6 +114,8 @@ class RuleSet:
         """jsonb から復元する。未知のキーは無視し、欠けたキーは既定値で補う。
 
         古いレコードに新しい項目が無くても壊れないようにするための寛容な変換。
+        矛盾した値（ウマの数が人数と合わない等）に対しては RuleError を送出する。
+        壊れた値でも画面を落としたくない場合は `load_ruleset()` を使うこと。
         """
         if not data:
             return cls()
@@ -107,6 +125,7 @@ class RuleSet:
             "return_score",
             "uma",
             "tobi_bonus",
+            "tobi_includes_zero",
             "round_mode",
             "rate",
         }
@@ -146,3 +165,85 @@ def presets_for(player_count: int) -> dict[str, RuleSet]:
 
 
 DEFAULT_RULESET = PRESETS_4P["ゴットー (5-10)"]
+
+
+# --- 壊れたレコードの安全な読み込み -----------------------------------------
+
+
+def _coerce_int(value: Any, fallback: int) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def load_ruleset(data: dict[str, Any] | None) -> tuple[RuleSet, list[str]]:
+    """保存済みの ruleset を、何があっても例外を投げずに復元する。
+
+    旧実装は `RuleSet.from_dict` の RuleError を誰も捕まえておらず、
+    壊れたレコードが1件あるだけで大会一覧ページ全体が落ちていた。
+    ここでは項目ごとに検証して既定値で補い、直した内容を警告として返す。
+
+    ウマの合計が0でない場合は 1位のウマを `-(2位以下の合計)` に補正する。
+    これは計算方式（トップは2位以下の合計の反転）が元々そう振る舞っていた値と
+    同じなので、**過去の点数は1点も変わらない**。
+
+    Returns:
+        (復元した RuleSet, 修復した内容の説明。空なら無修正)
+    """
+    warnings: list[str] = []
+    if not data:
+        return RuleSet(), warnings
+    try:
+        return RuleSet.from_dict(data), warnings
+    except (RuleError, TypeError, ValueError) as exc:
+        warnings.append(str(exc))
+
+    count = _coerce_int(data.get("player_count"), 4)
+    if count not in (3, 4):
+        warnings.append(f"人数「{data.get('player_count')}」は不正です。4人として扱います。")
+        count = 4
+    base = presets_for(count)[next(iter(presets_for(count)))]
+
+    start = _coerce_int(data.get("start_score"), base.start_score)
+    ret = _coerce_int(data.get("return_score"), base.return_score)
+    if ret < start:
+        warnings.append(f"返し点({ret})が配給原点({start})を下回っていたため、{start}に補正しました。")
+        ret = start
+
+    try:
+        uma = tuple(int(v) for v in data.get("uma", base.uma))
+    except (TypeError, ValueError):
+        uma = base.uma
+        warnings.append("ウマを読み取れなかったため既定値に戻しました。")
+    if len(uma) != count:
+        warnings.append(f"ウマが{len(uma)}個で{count}人と合わないため既定値に戻しました。")
+        uma = base.uma
+    if sum(uma) != 0:
+        fixed = (-sum(uma[1:]),) + uma[1:]
+        warnings.append(
+            f"ウマの合計が{sum(uma):+d}だったため、1位を{fixed[0]:+d}に補正しました"
+            "（従来の計算結果と同じ値です）。"
+        )
+        uma = fixed
+
+    mode = data.get("round_mode", base.round_mode)
+    if mode not in ROUND_MODES:
+        warnings.append(f"端数処理「{mode}」は不明です。五捨六入として扱います。")
+        mode = ROUND_GOSHA_ROKUNYU
+
+    tobi = max(0, _coerce_int(data.get("tobi_bonus"), 0))
+
+    return (
+        RuleSet(
+            player_count=count,
+            start_score=start,
+            return_score=ret,
+            uma=uma,
+            tobi_bonus=tobi,
+            tobi_includes_zero=bool(data.get("tobi_includes_zero", False)),
+            round_mode=mode,
+            rate=_coerce_int(data.get("rate"), 0),
+        ),
+        warnings,
+    )

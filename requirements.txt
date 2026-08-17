@@ -3,10 +3,10 @@ streamlit
 pandas
 altair
 
-# --- Supabase / Postgres ---
-# データ操作は SQLAlchemy 直結、認証(Auth)のみ supabase-py を使うハイブリッド構成
-SQLAlchemy>=2.0
-psycopg2-binary
+# --- Supabase ---
+# 認証もデータ操作もすべて supabase-py（REST API / PostgREST）経由。
+# 利用環境が 443 以外の外向き通信を遮断しているため、Postgres への直結は使わない。
+# 副次的な効果として RLS が実際に適用される。
 supabase
 
 # --- ログインセッションの永続化（F5リロードで再ログインさせないため） ---
@@ -14,3 +14,5 @@ streamlit-cookies-controller
 
 # --- 開発用 ---
 pytest
+# マイグレーションSQLを PostgreSQL 本体のパーサで構文検証する
+pglast

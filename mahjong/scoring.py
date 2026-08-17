@@ -62,6 +62,10 @@ def round_to_point(diff: int, mode: str = ROUND_GOSHA_ROKUNYU) -> int:
     Returns:
         丸め後のポイント。
 
+    どの方式も**絶対値に対して**丸めて符号を戻す。麻雀の「切り上げ／切り捨て」は
+    数学的な ceil/floor（±∞方向）ではなく「点数の大きさを繰り上げる／捨てる」意味であり、
+    ±∞方向で丸めると -25.6 が -25 になるなど、五捨六入と符号ごとに挙動が食い違う。
+
     Examples:
         >>> round_to_point(600)      # +0.6 → 五捨六入 → +1
         1
@@ -71,17 +75,17 @@ def round_to_point(diff: int, mode: str = ROUND_GOSHA_ROKUNYU) -> int:
         -26
         >>> round_to_point(4600)     # float だと 4 になりがちな境界
         5
+        >>> round_to_point(-400, ROUND_CEIL)   # 絶対値を繰り上げる
+        -1
     """
-    if mode == ROUND_CEIL:
-        # -(-d // 1000) は整数のまま切り上げになる
-        return -((-diff) // 1000)
-    if mode == ROUND_FLOOR:
-        return diff // 1000
-
     if mode == ROUND_GOSHA_ROKUNYU:
         bias = 400  # .6 以上で繰り上がる
     elif mode == ROUND_SHISHA_GONYU:
         bias = 500  # .5 以上で繰り上がる
+    elif mode == ROUND_CEIL:
+        bias = 999  # 端数があれば必ず繰り上がる（ちょうどの倍数は動かない）
+    elif mode == ROUND_FLOOR:
+        bias = 0  # 端数は常に捨てる
     else:
         raise ScoringError(f"未知の端数処理方式です: {mode}")
 
@@ -90,11 +94,32 @@ def round_to_point(diff: int, mode: str = ROUND_GOSHA_ROKUNYU) -> int:
     return sign * ((abs(diff) + bias) // 1000)
 
 
+def effective_oka(rules: RuleSet) -> int:
+    """端数処理を通した実効オカ（pt）。
+
+    `RuleSet.oka` は (返し点-配給原点)×人数÷1000 の名目値で、
+    返し点差が1000の倍数でないと実際にトップへ渡る額とずれる。
+    表示にはこちらを使うこと。
+
+    Examples:
+        >>> from .rules import RuleSet
+        >>> effective_oka(RuleSet())                      # 25000 / 30000
+        20
+        >>> effective_oka(RuleSet(return_score=30250))    # 名目21だが実効は20
+        20
+    """
+    per_seat = round_to_point(rules.start_score - rules.return_score, rules.round_mode)
+    return -rules.player_count * per_seat
+
+
 def validate_total(raw_scores: list[int], rules: RuleSet) -> tuple[bool, int, int]:
     """点棒の合計が卓上の総数と一致するか検証する。
 
-    供託（リーチ棒の残り）がある場合は正当に不一致となりうるため、
-    呼び出し側は保存を止めず「警告」にとどめること。
+    不一致のまま計算すると、差分がまるごとトップの得点になる
+    （トップは2位以下の合計の反転で求めるため）。入力ミスが
+    静かに1位への加点に化けるので、既定では `calc_round` が保存を止める。
+    供託（リーチ棒の残り）で正当に不一致となる場合のみ、
+    呼び出し側が明示的に `strict=False` を渡すこと。
 
     Returns:
         (一致しているか, 期待値, 実際の合計)
@@ -136,6 +161,7 @@ def calc_round(
     kazes: list[str],
     rules: RuleSet,
     seats: list[int] | None = None,
+    strict: bool = True,
 ) -> list[SeatResult]:
     """半荘1回分のポイントを計算する。
 
@@ -145,12 +171,15 @@ def calc_round(
         rules: 適用するルール。
         seats: 各要素が対戦内のどの席かを示すインデックス。
             省略時は 0,1,2,... とみなす。3人麻雀で player1/2/4 を使う場合などに指定する。
+        strict: 持ち点の合計が卓上の総数と一致しない場合に例外を投げるか。
+            供託が残る場合や、保存済みデータの再計算では False にする。
 
     Returns:
         入力と同じ並びの SeatResult。
 
     Raises:
-        ScoringError: 人数がルールと合わない、風が重複しているなど。
+        ScoringError: 人数がルールと合わない、風が重複している、
+            strict かつ持ち点の合計が合わない。
     """
     n = len(raw_scores)
     if n != rules.player_count:
@@ -161,6 +190,15 @@ def calc_round(
         seats = list(range(n))
     elif len(seats) != n:
         raise ScoringError("席インデックスの数が持ち点の数と一致しません。")
+
+    if strict:
+        ok, expected, actual = validate_total(raw_scores, rules)
+        if not ok:
+            raise ScoringError(
+                f"持ち点の合計が{actual:,}点で、{expected:,}点と一致しません"
+                f"（差{actual - expected:+,}点）。"
+                "このまま計算すると差額がすべてトップの得点になります。"
+            )
 
     ranks = determine_ranks(raw_scores, kazes)
     top_idx = ranks.index(1)
@@ -174,8 +212,12 @@ def calc_round(
         points[i] = base + rules.uma[ranks[i] - 1]
     points[top_idx] = -sum(points[i] for i in range(n) if i != top_idx)
 
-    # 飛び賞はトップとの移動として扱い、合計0を維持する
-    tobi_flags = [score < 0 for score in raw_scores]
+    # 飛び賞はトップとの移動として扱い、合計0を維持する。
+    # 持ち点ちょうど0をハコとみなすかはルール次第なので設定で切り替える。
+    if rules.tobi_includes_zero:
+        tobi_flags = [score <= 0 for score in raw_scores]
+    else:
+        tobi_flags = [score < 0 for score in raw_scores]
     if rules.tobi_bonus:
         for i in range(n):
             if i != top_idx and tobi_flags[i]:
@@ -204,6 +246,10 @@ def recalculate(
     ルール（ウマ・返し点など）を後から変更したときに、過去のデータを追従させるために使う。
     持ち点を保存しているからこそ可能になる操作。
 
+    保存済みの記録には供託などで合計が合わないものが混ざりうるため、
+    合計の検証は行わない（strict=False）。ここで弾くと過去データを
+    まるごと再計算できなくなってしまう。
+
     Args:
         stored_rounds: 各要素が {"seats": [...], "raw_scores": [...], "kazes": [...]} の辞書。
 
@@ -216,6 +262,7 @@ def recalculate(
             kazes=r["kazes"],
             rules=rules,
             seats=r.get("seats"),
+            strict=False,
         )
         for r in stored_rounds
     ]

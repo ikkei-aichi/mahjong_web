@@ -3,35 +3,15 @@ base = "light"
 font = "noto-sans-jp"
 codeFont = "noto-sans-jp"
 
-[[theme.fontFaces]]
-family = "noto-sans-jp"
-url = "static/NotoSansJP-Thin.ttf"
-style = "normal"
-weight = 100
-
-[[theme.fontFaces]]
-family = "noto-sans-jp"
-url = "static/NotoSansJP-ExtraLight.ttf"
-style = "normal"
-weight = 200
-
-[[theme.fontFaces]]
-family = "noto-sans-jp"
-url = "static/NotoSansJP-Light.ttf"
-style = "normal"
-weight = 300
+# 宣言したウェイトはブラウザが必要に応じて取りに行く。
+# 9ウェイト（約5.4MB）を並べていたが、実際に使うのは本文・強調・見出しの3つだけ。
+# スマホで卓上から開くことを考えると、使わないウェイトの宣言は載せない。
 
 [[theme.fontFaces]]
 family = "noto-sans-jp"
 url = "static/NotoSansJP-Regular.ttf"
 style = "normal"
 weight = 400
-
-[[theme.fontFaces]]
-family = "noto-sans-jp"
-url = "static/NotoSansJP-Medium.ttf"
-style = "normal"
-weight = 500
 
 [[theme.fontFaces]]
 family = "noto-sans-jp"
@@ -44,18 +24,6 @@ family = "noto-sans-jp"
 url = "static/NotoSansJP-Bold.ttf"
 style = "normal"
 weight = 700
-
-[[theme.fontFaces]]
-family = "noto-sans-jp"
-url = "static/NotoSansJP-ExtraBold.ttf"
-style = "normal"
-weight = 800
-
-[[theme.fontFaces]]
-family = "noto-sans-jp"
-url = "static/NotoSansJP-Black.ttf"
-style = "normal"
-weight = 900
 
 [server]
 enableStaticServing = true
