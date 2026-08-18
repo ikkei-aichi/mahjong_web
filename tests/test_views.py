@@ -217,7 +217,11 @@ def test_save_shows_confirmation_after_rerun(monkeypatch, backend):
 
 
 def test_winds_rotate_for_the_next_round(monkeypatch, backend):
-    """親は毎半荘移る。前の半荘の風を1つずらした値が初期値になる。"""
+    """親は毎半荘移る。前の半荘の風を1つずらした値が初期値になる。
+
+    ずれる向きは打順（東→南→西→北）と同じで、**前回の南家が次の東家**になる。
+    逆回りにすると前回の北家が親になってしまい、風別成績が実態とずれる。
+    """
     app = run("views/game.py", monkeypatch, backend, game=backend.game_id)
     assert [s.value for s in new_round_winds(app)] == ["東", "南", "西", "北"]
 
@@ -225,7 +229,8 @@ def test_winds_rotate_for_the_next_round(monkeypatch, backend):
         new_round_inputs(app)[i].set_value(value)
     app = click(app, "半荘目を登録").click().run()
 
-    assert [s.value for s in new_round_winds(app)] == ["南", "西", "北", "東"]
+    # 席1（前回の南家）が次の東家になる
+    assert [s.value for s in new_round_winds(app)] == ["北", "東", "南", "西"]
 
 
 # --- ライブ計算 -------------------------------------------------------------
@@ -570,6 +575,135 @@ def test_stats_scope_selector_survives_switching(monkeypatch, backend):
 
     app = run("views/stats.py", monkeypatch, backend, group=backend.group_id)
     scope = next(s for s in app.selectbox if s.label == "集計範囲")
-    scope.set_value("2026年春麻雀大会")
+    # 選択肢の実体は大会ID（表示名ではない）
+    scope.set_value(backend.tournament_id)
     app = app.run()
     assert not app.exception
+
+
+# --- 同名の項目を取り違えないこと -------------------------------------------
+# 大会名・グループ名には一意制約が無い。選択結果を表示名から引き直していると
+# `labels.index(chosen)` が必ず1つ目を返すため、「2つ目を選んだのに
+# 1つ目のルールを上書き・削除する」取り違えが起きていた。
+
+
+def two_tournaments_with_the_same_name(backend: FakeBackend) -> str:
+    """同じ名前の大会をもう1つ足して、その ID を返す。"""
+    first = backend.tournaments[0]
+    second = dict(first)
+    second["id"] = "trn-second"
+    second["name"] = first["name"]
+    second["note"] = "2つ目の大会"
+    backend.tournaments = [first, second]
+    return second["id"]
+
+
+def test_settings_edits_the_tournament_named_in_the_url(monkeypatch, backend):
+    """同名の大会が2つあっても、URL で指定した方が編集対象になること。"""
+    second_id = two_tournaments_with_the_same_name(backend)
+
+    app = run("views/settings.py", monkeypatch, backend, tournament=second_id)
+    assert not app.exception
+
+    assert any("2つ目の大会" == t.value for t in app.text_area), (
+        "URL で2つ目を指定したのに1つ目が編集対象になっている: "
+        + repr([t.value for t in app.text_area])
+    )
+
+
+def test_settings_switches_to_the_chosen_tournament_when_names_collide(monkeypatch, backend):
+    """同名の大会でも、選び直せば対象が入れ替わること。"""
+    second_id = two_tournaments_with_the_same_name(backend)
+
+    app = run("views/settings.py", monkeypatch, backend)
+    picker = next(s for s in app.selectbox if s.label == "大会")
+    # 選択肢の実体は大会ID。同名でも表示には連番が付いて見分けられる。
+    assert picker.options == ["2026年春麻雀大会 (1)", "2026年春麻雀大会 (2)"]
+
+    app = picker.set_value(second_id).run()
+    assert not app.exception
+    assert any("2つ目の大会" == t.value for t in app.text_area)
+
+
+def test_stats_aggregates_the_tournament_named_in_the_url(monkeypatch, backend):
+    """同名の大会が2つあっても、URL で指定した方が集計されること。"""
+    second_id = two_tournaments_with_the_same_name(backend)
+
+    install(monkeypatch, backend)
+    from mahjong.repo import queries
+
+    seen: list[tuple[str, str]] = []
+    original = queries.fetch_entries
+    monkeypatch.setattr(
+        queries,
+        "fetch_entries",
+        lambda scope, value: (seen.append((scope, value)), original(scope, value))[1],
+    )
+
+    app = AppTest.from_file(str(ROOT / "views/stats.py"), default_timeout=TIMEOUT)
+    app.query_params["tournament"] = second_id
+    app.run()
+
+    assert seen and seen[-1] == ("tournament_id", second_id), (
+        f"URL で {second_id} を指定したのに {seen} で集計された"
+    )
+
+
+def test_group_picker_switches_between_groups_with_the_same_name(monkeypatch, backend):
+    """同名のグループが2つあっても、2つ目に切り替えられること。"""
+    other = dict(backend.group)
+    other["group_id"] = "grp-second"  # 名前は1つ目と同じ
+
+    # 本番と同じく「いま見ているグループ」は URL から解決する。
+    # そうしないと切り替え後も current が1つ目のままになり、
+    # サイドバーが毎回 st.rerun() を呼んで止まらなくなる。
+    app = AppTest.from_string(
+        "import streamlit as st\n"
+        "from mahjong import session\n"
+        "groups = st.session_state['_groups']\n"
+        "session.sidebar_group_picker(groups, session.active_group(groups))\n",
+        default_timeout=TIMEOUT,
+    )
+    app.session_state["_groups"] = [backend.group, other]
+    app = app.run()
+
+    picker = next(s for s in app.selectbox if s.label == "グループ")
+    assert picker.options == ["テスト麻雀会 (1)", "テスト麻雀会 (2)"]
+
+    app = picker.set_value("grp-second").run()
+
+    # AppTest の query_params は値をリストで返す
+    chosen = app.query_params.get("group")
+    chosen = chosen[0] if isinstance(chosen, list) else chosen
+    assert chosen == "grp-second", (
+        f"2つ目のグループを選んでも切り替わらない: {dict(app.query_params)}"
+    )
+
+
+# --- 壊れたデータで画面ごと落とさないこと -----------------------------------
+
+
+def test_tournaments_page_survives_a_non_dict_ruleset(monkeypatch, backend):
+    """ruleset は jsonb なので、SQL から文字列や配列も書けてしまう。
+
+    旧実装は素の AttributeError が漏れて大会一覧が丸ごと開けなくなっていた。
+    """
+    backend.tournaments[0]["ruleset"] = "gosha_rokunyu"
+
+    app = run("views/tournaments.py", monkeypatch, backend)
+    assert not app.exception, f"大会一覧が落ちた: {app.exception}"
+    assert any("形式が不正" in w.value for w in app.warning)
+
+
+@pytest.mark.parametrize("role", [None, "viewer"])
+def test_members_page_survives_an_unexpected_role(monkeypatch, backend, role):
+    """想定外の役割が入っていてもメンバー画面を開けること。
+
+    DB 側の CHECK 制約で防いではいるが、`.index()` の ValueError で
+    画面が丸ごと開けなくなると、直すための操作すらできなくなる。
+    """
+    backend.players[1]["user_id"] = "user-2"
+    backend.players[1]["role"] = role
+
+    app = run("views/members.py", monkeypatch, backend)
+    assert not app.exception, f"メンバー画面が落ちた: {app.exception}"

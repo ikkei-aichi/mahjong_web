@@ -37,13 +37,20 @@ choices: list[tuple[str, str, str]] = [(GROUP_TOTAL, "group_id", "グループ�
 for tournament in tournaments:
     choices.append((tournament["id"], "tournament_id", tournament["name"]))
 
-labels = [label for _, _, label in choices]
 # URL の ?tournament= で来たら、その大会を初期選択にする
 wanted = ui.param("tournament")
 default_index = next((i for i, (cid, _, _) in enumerate(choices) if cid == wanted), 0)
 
-chosen = st.selectbox("集計範囲", labels, index=default_index, key="stats_scope")
-target_id, scope, _ = choices[labels.index(chosen)]
+# 大会名に一意制約は無い。表示名で引き直すと、同名の大会が2つあるとき
+# 2つ目を選んでも1つ目の成績が出てしまう。選択の実体は大会IDにする。
+chosen_id = ui.select_one(
+    "集計範囲",
+    [cid for cid, _, _ in choices],
+    [label for _, _, label in choices],
+    index=default_index,
+    key="stats_scope",
+)
+target_id, scope, _ = next(c for c in choices if c[0] == chosen_id)
 
 if scope == "group_id":
     value = group["group_id"]
@@ -57,14 +64,20 @@ else:
 
     days = tournaments_repo.list_days(target_id)
     if days:
+        ALL_DAYS = ""
         day_labels = ["すべての開催日"] + [
             f"{d['held_on']}" + (f"（{d['label']}）" if d.get("label") else "") for d in days
         ]
         # 大会が変わると選択肢の顔ぶれも変わる。キーに大会IDを含めないと
         # 前の大会の選択が残って別の日を指してしまう。
-        day_choice = st.selectbox("開催日", day_labels, key=f"stats_day_{target_id}")
-        if day_choice != "すべての開催日":
-            scope, value = "day_id", days[day_labels.index(day_choice) - 1]["id"]
+        chosen_day = ui.select_one(
+            "開催日",
+            [ALL_DAYS] + [d["id"] for d in days],
+            day_labels,
+            key=f"stats_day_{target_id}",
+        )
+        if chosen_day != ALL_DAYS:
+            scope, value = "day_id", chosen_day
 
 try:
     entries = queries.fetch_entries(scope, value)
@@ -167,11 +180,16 @@ st.dataframe(matrix, hide_index=True)
 
 st.markdown("### 個人別")
 
-player_labels = [s.name for s in played]
 # キーに集計範囲を含める。含めないと別の範囲へ移ったとき、
 # そこに存在しない名前が選択されたままになって落ちる。
-target = st.selectbox("プレイヤー", player_labels, key=f"stats_player_{scope}_{value}")
-selected = next((s for s in played if s.name == target), None)
+# 選択の実体は player_id。退会者は表示名が重複しうるので名前では引かない。
+target = ui.select_one(
+    "プレイヤー",
+    [s.player_id for s in played],
+    [s.name for s in played],
+    key=f"stats_player_{scope}_{value}",
+)
+selected = next((s for s in played if s.player_id == target), None)
 
 if selected is not None:
     col1, col2, col3, col4 = st.columns(4)

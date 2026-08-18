@@ -13,6 +13,7 @@ from typing import Any
 
 import streamlit as st
 
+from . import ui
 from .errors import AppError
 from .repo import groups as groups_repo
 
@@ -70,12 +71,20 @@ def sidebar_group_picker(groups: list[dict[str, Any]], current: dict[str, Any]) 
     """サイドバーのグループ切替。2つ以上あるときだけ出す。"""
     with st.sidebar:
         if len(groups) > 1:
-            names = [g["name"] for g in groups]
             index = next(
                 (i for i, g in enumerate(groups) if g["group_id"] == current["group_id"]), 0
             )
-            chosen = st.selectbox("グループ", names, index=index, key="_group_picker")
-            picked = groups[names.index(chosen)]
+            # 同名のグループがあっても取り違えないよう、選択の実体は group_id にする。
+            # 表示名で引き直していた頃は、2つ目の同名グループを選んでも
+            # 1つ目が返るため切り替えが起きなかった。
+            picked_id = ui.select_one(
+                "グループ",
+                [g["group_id"] for g in groups],
+                [g["name"] for g in groups],
+                index=index,
+                key="_group_picker",
+            )
+            picked = next(g for g in groups if g["group_id"] == picked_id)
             if picked["group_id"] != current["group_id"]:
                 st.query_params.clear()
                 st.query_params[_GROUP_PARAM] = picked["group_id"]

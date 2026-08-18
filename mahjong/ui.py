@@ -18,7 +18,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Iterable
+from typing import Any, Iterable, Sequence
 
 import streamlit as st
 
@@ -45,12 +45,84 @@ def rank_medal(index: int) -> str:
 
 
 def kaze_rotated(kazes: Iterable[str], by: int = 1) -> list[str]:
-    """風を1つずらす。次の半荘の初期値に使う（親が移るため）。"""
+    """席に割り当てられた風をずらす。
+
+    `by` は**リストを左へずらす数**で、席から見た風の進み方とは向きが逆になる。
+    親を次の席へ移す（＝各席の風を東←南←西←北の向きに1つ進める）には
+    `by=-1` を渡すこと。
+
+    Examples:
+        >>> kaze_rotated(["東", "南", "西", "北"], -1)   # 次の親は seat1
+        ['北', '東', '南', '西']
+    """
     values = list(kazes)
     if not values:
         return values
     shift = by % len(values)
     return values[shift:] + values[:shift]
+
+
+# --- 一覧から1件選ぶ --------------------------------------------------------
+# ★表示名から選び直してはいけない★
+# `labels.index(chosen)` で引き直す実装は、同じ名前の項目が2つあると必ず1つ目を返す。
+# 大会名・グループ名に一意制約は無いので、同名の大会を2つ作ると
+# 「2つ目を選んだのに1つ目のルールが保存され、1つ目が削除される」という
+# 取り違えが起きていた。選択肢の実体を ID にしておけば構造的に防げる。
+
+
+def unique_labels(labels: Sequence[str]) -> list[str]:
+    """重複した表示名にだけ連番を付ける。
+
+    ID で選ばせれば取り違えは起きないが、画面に同じ名前が2つ並ぶと
+    利用者にはどちらがどちらか分からない。重複したものだけ (1)(2) を付ける。
+    """
+    total: dict[str, int] = {}
+    for label in labels:
+        total[label] = total.get(label, 0) + 1
+
+    seen: dict[str, int] = {}
+    result: list[str] = []
+    for label in labels:
+        if total[label] == 1:
+            result.append(label)
+            continue
+        seen[label] = seen.get(label, 0) + 1
+        result.append(f"{label} ({seen[label]})")
+    return result
+
+
+def select_one(
+    label: str,
+    values: Sequence[Any],
+    labels: Sequence[str],
+    *,
+    key: str,
+    index: int = 0,
+    radio: bool = False,
+    **kwargs: Any,
+) -> Any:
+    """一覧から1件選ばせて、**選ばれた値そのもの**を返す。
+
+    Args:
+        values: 選択肢の実体（ID など、重複しない値を渡すこと）。
+        labels: 各値の表示名。同名があれば `unique_labels` で見分けが付くようにする。
+        radio: True なら st.radio、False なら st.selectbox で描画する。
+
+    Returns:
+        選ばれた `values` の要素。表示名が重複していても取り違えない。
+    """
+    if len(values) != len(labels):
+        raise ValueError("values と labels の数が一致しません。")
+    shown = dict(zip(values, unique_labels(list(labels))))
+    widget = st.radio if radio else st.selectbox
+    return widget(
+        label,
+        list(values),
+        index=index,
+        format_func=lambda value: shown.get(value, str(value)),
+        key=key,
+        **kwargs,
+    )
 
 
 # --- ページ遷移 -------------------------------------------------------------

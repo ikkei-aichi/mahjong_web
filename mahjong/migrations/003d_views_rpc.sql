@@ -33,10 +33,12 @@ SELECT
 FROM public.round_results rr
 JOIN public.game_rounds     r ON r.id = rr.round_id AND r.deleted_at IS NULL
 JOIN public.games           g ON g.id = r.game_id   AND g.deleted_at IS NULL
-JOIN public.tournament_days d ON d.id = g.day_id
-JOIN public.tournaments     t ON t.id = g.tournament_id
+JOIN public.tournament_days d ON d.id = g.day_id    AND d.deleted_at IS NULL
+JOIN public.tournaments     t ON t.id = g.tournament_id AND t.deleted_at IS NULL
 JOIN public.players         p ON p.id = rr.player_id;
--- players は deleted_at で絞らない。削除したプレイヤーの記録も残す
+-- 大会・開催日も deleted_at で絞る。絞り忘れると、削除した大会や開催日の記録が
+-- グループ通算成績と「全N半荘」に残り続ける（一覧からは消えているのに数字だけ合わない）。
+-- players だけは絞らない。削除したプレイヤーの記録は残す
 -- （集計から消すと合計がゼロサムでなくなる）。
 
 DROP VIEW IF EXISTS public.v_game_seats;
@@ -48,7 +50,10 @@ SELECT
     COALESCE(agg.total_point, 0) AS total_point,
     COALESCE(cnt.round_count, 0) AS round_count
 FROM public.games g
-JOIN public.tournament_days d ON d.id = g.day_id
+-- 削除した開催日・大会の卓を残すと、ホームの「続きを入力」が
+-- 一覧から消えたはずの卓を指してしまう。
+JOIN public.tournament_days d ON d.id = g.day_id AND d.deleted_at IS NULL
+JOIN public.tournaments     t ON t.id = g.tournament_id AND t.deleted_at IS NULL
 JOIN public.game_players   gp ON gp.game_id = g.id
 JOIN public.players         p ON p.id = gp.player_id
 LEFT JOIN (

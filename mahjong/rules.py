@@ -116,9 +116,16 @@ class RuleSet:
         古いレコードに新しい項目が無くても壊れないようにするための寛容な変換。
         矛盾した値（ウマの数が人数と合わない等）に対しては RuleError を送出する。
         壊れた値でも画面を落としたくない場合は `load_ruleset()` を使うこと。
+
+        `ruleset` は jsonb なので、SQL から直接書けば文字列や配列も入りうる。
+        その場合も RuleError にする（素の AttributeError を漏らさない）。
         """
         if not data:
             return cls()
+        if not isinstance(data, dict):
+            raise RuleError(
+                f"ルール設定は連想配列である必要があります（{type(data).__name__} が入っています）。"
+            )
         known = {
             "player_count",
             "start_score",
@@ -194,6 +201,12 @@ def load_ruleset(data: dict[str, Any] | None) -> tuple[RuleSet, list[str]]:
     warnings: list[str] = []
     if not data:
         return RuleSet(), warnings
+    if not isinstance(data, dict):
+        # jsonb に文字列や配列が入っているケース。この下の修復処理は
+        # dict であることを前提にしているので、ここで既定値に倒す。
+        return RuleSet(), [
+            f"ルール設定の形式が不正（{type(data).__name__}）だったため、既定のルールで表示しています。"
+        ]
     try:
         return RuleSet.from_dict(data), warnings
     except (RuleError, TypeError, ValueError) as exc:

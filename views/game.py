@@ -227,14 +227,20 @@ def score_entry(
 
 
 def next_kazes() -> list[str]:
-    """次の半荘の風。前の半荘から1つずらす（親が移るため）。"""
+    """次の半荘の風。前の半荘から1つずらす（親が移るため）。
+
+    親は打順（東→南→西→北）の向きに移るので、**前回の南家が次の東家**になる。
+    つまり各席の風は東←南←西←北の向きに1つ進む。
+    `kaze_rotated(previous, 1)` はリストを左へずらす＝親が逆回りに移る動きで、
+    前回の北家が次の親になってしまうため -1 を渡す。
+    """
     base = list(KAZE_NAMES[: len(seats)])
     if not rounds:
         return base
     previous = [r["kaze"] for r in sorted(rounds[-1]["results"], key=lambda x: x["seat"])]
     if sorted(previous) != sorted(base):
         return base
-    return ui.kaze_rotated(previous, 1)
+    return ui.kaze_rotated(previous, -1)
 
 
 def save_new(results: list[SeatResult]) -> None:

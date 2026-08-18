@@ -44,10 +44,15 @@ if group.get("is_provisional"):
         m for m in members if not m.get("user_id") and m["id"] != my_player_id
     ]
     if unclaimed:
-        labels = [m["name"] for m in unclaimed]
-        chosen = st.selectbox("自分の名前", labels, key="link_pick")
+        # 誰の成績を引き継ぐかを決める操作なので、名前ではなく player_id で選ぶ。
+        chosen_id = ui.select_one(
+            "自分の名前",
+            [m["id"] for m in unclaimed],
+            [m["name"] for m in unclaimed],
+            key="link_pick",
+        )
         if st.button("この名前を自分にする", type="primary", width="stretch"):
-            target = unclaimed[labels.index(chosen)]
+            target = next(m for m in unclaimed if m["id"] == chosen_id)
             try:
                 groups_repo.link_me_to_player(target["id"])
             except AppError as exc:
@@ -98,10 +103,16 @@ for member in members:
             with col2:
                 if is_admin and has_account and not is_me:
                     roles = list(groups_repo.MEMBER_ROLES)
+                    # 想定外の役割（NULL や未知の値）が入っていても画面ごと落とさない。
+                    # DB 側の CHECK 制約で防いではいるが、ここで .index() が
+                    # ValueError を投げるとメンバー画面が丸ごと開けなくなる。
+                    current_role = member.get("role") or "member"
+                    if current_role not in roles:
+                        current_role = "member"
                     role = st.selectbox(
                         "役割",
                         roles,
-                        index=roles.index(member.get("role", "member")),
+                        index=roles.index(current_role),
                         format_func=lambda r: groups_repo.ROLE_LABELS[r],
                         key=f"role_{member['id']}",
                         label_visibility="collapsed",

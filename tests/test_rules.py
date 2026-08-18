@@ -173,3 +173,21 @@ def test_load_ruleset_never_raises_on_arbitrary_junk():
     for junk in ({"uma": "abc"}, {"uma": [1, 2]}, {"tobi_bonus": -5}, {"player_count": 99}):
         rules, _ = load_ruleset(junk)
         assert isinstance(rules, RuleSet)
+
+
+def test_load_ruleset_survives_a_non_dict_value():
+    """ruleset は jsonb なので、SQL から文字列・配列・数値も書けてしまう。
+
+    旧実装は `data.items()` の AttributeError が誰にも捕まえられず、
+    そういうレコードが1件あるだけで大会一覧ページ全体が落ちていた。
+    """
+    for junk in ("gosha_rokunyu", ["uma"], 5, 1.5, True):
+        rules, warnings = load_ruleset(junk)
+        assert isinstance(rules, RuleSet)
+        assert warnings, f"{junk!r} を既定値に倒したことが警告されていない"
+
+
+def test_from_dict_raises_rule_error_for_a_non_dict_value():
+    """直接呼ぶ側にも、素の AttributeError ではなく RuleError を見せる。"""
+    with pytest.raises(RuleError):
+        RuleSet.from_dict("gosha_rokunyu")

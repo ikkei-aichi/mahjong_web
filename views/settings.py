@@ -40,12 +40,18 @@ with tab_tournament:
     if not tournaments:
         st.info("まだ大会がありません。")
     else:
-        labels = [t["name"] for t in tournaments]
         wanted = ui.param("tournament")
         index = next((i for i, t in enumerate(tournaments) if t["id"] == wanted), 0)
-        chosen = st.selectbox("大会", labels, index=index, key="settings_tournament")
-        tournament = tournaments[labels.index(chosen)]
-        tournament_id = tournament["id"]
+        # 大会名に一意制約は無い。表示名で引き直すと、同名の大会が2つあるとき
+        # 常に1つ目が選ばれ、2つ目のつもりで1つ目のルールを上書き・削除してしまう。
+        tournament_id = ui.select_one(
+            "大会",
+            [t["id"] for t in tournaments],
+            [t["name"] for t in tournaments],
+            index=index,
+            key="settings_tournament",
+        )
+        tournament = next(t for t in tournaments if t["id"] == tournament_id)
 
         current_rules, warnings = tournaments_repo.get_ruleset(tournament_id)
         if warnings:

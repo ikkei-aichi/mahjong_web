@@ -52,11 +52,16 @@ with tab_join:
                 options = [("__new__", "＋ 新しく登録する")] + [
                     (p["id"], p["name"]) for p in claimable
                 ]
-                labels = [label for _, label in options]
-                chosen = st.radio(
-                    "名前", labels, key="join_pick", label_visibility="collapsed"
+                # 誰の成績を引き継ぐかを決める操作なので、名前ではなく
+                # player_id で選ぶ。同名の候補が並んでも別人を掴まない。
+                picked_id = ui.select_one(
+                    "名前",
+                    [value for value, _ in options],
+                    [label for _, label in options],
+                    key="join_pick",
+                    radio=True,
+                    label_visibility="collapsed",
                 )
-                picked_id = options[labels.index(chosen)][0]
 
                 new_name = ""
                 if picked_id == "__new__":

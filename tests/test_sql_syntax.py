@@ -154,3 +154,54 @@ def test_no_force_row_level_security():
     for path in SQL_FILES:
         text = code_only(path.read_text(encoding="utf-8")).upper()
         assert "FORCE ROW LEVEL SECURITY" not in text, path.name
+
+
+# --- 論理削除した親を集計に混ぜないこと -------------------------------------
+
+
+def _view_body(name: str) -> str:
+    """指定したビューの CREATE VIEW ... ; の中身（コメント除去済み）。"""
+    text = code_only((MIGRATIONS / "003d_views_rpc.sql").read_text(encoding="utf-8"))
+    start = text.index(f"CREATE VIEW public.{name} ")
+    return text[start : text.index(";", start)]
+
+
+@pytest.mark.parametrize(
+    "view,table",
+    [
+        ("v_round_entries", "tournament_days"),
+        ("v_round_entries", "tournaments"),
+        ("v_game_seats", "tournament_days"),
+        ("v_game_seats", "tournaments"),
+    ],
+)
+def test_views_exclude_soft_deleted_parents(view: str, table: str):
+    """削除した大会・開催日の記録が成績に残り続けないこと。
+
+    delete_tournament / delete_day は deleted_at を立てるだけで、
+    カスケードするトリガは無い。ビュー側で絞らないと、一覧からは消えたのに
+    「グループ通算成績」と「全N半荘」には残るという食い違いが起きる。
+    """
+    import re
+
+    body = _view_body(view)
+    joins = re.findall(rf"JOIN\s+public\.{table}\b[^\n]*", body)
+    assert joins, f"{view} が {table} と結合していない"
+    for join in joins:
+        assert "deleted_at IS NULL" in join, (
+            f"{view} の {table} 結合に論理削除フィルタが無い: {join.strip()}"
+        )
+
+
+def test_views_keep_soft_deleted_players():
+    """★プレイヤーだけは絞らない★
+
+    削除したプレイヤーの記録まで落とすと、その人のポイントが集計から消えて
+    順位表の合計がゼロサムでなくなる。上のテストに引きずられて
+    players にもフィルタを足さないよう、意図をここで固定しておく。
+    """
+    for view in ("v_round_entries", "v_game_seats"):
+        import re
+
+        for join in re.findall(r"JOIN\s+public\.players\b[^\n]*", _view_body(view)):
+            assert "deleted_at" not in join, f"{view}: players を論理削除で絞っている"

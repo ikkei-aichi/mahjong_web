@@ -55,16 +55,24 @@ with col1:
     # 既定は自分。URL で ?player= を指定すればその人を開く。
     wanted = ui.param("player") or group.get("my_player_id")
     index = ids.index(wanted) if wanted in ids else 0
-    chosen_label = st.selectbox("プレイヤー", labels, index=index, key="player_pick")
-    player_id = ids[labels.index(chosen_label)]
+    # 選択の実体は player_id。退会者は表示名が重複しうる（同名の一意制約は
+    # 在籍中の行にしか効かない）ので、名前で引き直すと別人を開いてしまう。
+    player_id = ui.select_one(
+        "プレイヤー", ids, labels, index=index, key="player_pick"
+    )
 
 with col2:
     scope_choices: list[tuple[str, str, str]] = [("", "group_id", "グループ通算")]
     for t in tournaments:
         scope_choices.append((t["id"], "tournament_id", t["name"]))
-    scope_labels = [label for _, _, label in scope_choices]
-    scope_label = st.selectbox("範囲", scope_labels, key="player_scope")
-    target_id, scope, _ = scope_choices[scope_labels.index(scope_label)]
+    # 同名の大会があっても取り違えないよう、選択の実体は大会IDにする。
+    chosen_scope_id = ui.select_one(
+        "範囲",
+        [cid for cid, _, _ in scope_choices],
+        [label for _, _, label in scope_choices],
+        key="player_scope",
+    )
+    target_id, scope, _ = next(c for c in scope_choices if c[0] == chosen_scope_id)
 
 value = group["group_id"] if scope == "group_id" else target_id
 if scope == "group_id":
