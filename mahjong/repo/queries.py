@@ -61,6 +61,31 @@ def fetch_rounds_in_order(scope: str, value: str) -> list[list[RoundEntry]]:
     ]
 
 
+def fetch_entries_and_rounds(
+    scope: str, value: str
+) -> tuple[list[RoundEntry], list[list[RoundEntry]]]:
+    """集計用の全記録と、時系列順の半荘を1回の取得から両方作る。
+
+    成績画面は両方を使う。別々に呼ぶと同じ全件クエリが2回飛ぶ。
+    """
+    raw = _fetch(scope, value)
+    return (
+        [_entry(row) for row in raw],
+        [[_entry(r) for r in rnd["results"]] for rnd in group_rounds(raw)],
+    )
+
+
+def fetch_entries_and_count(scope: str, value: str) -> tuple[list[RoundEntry], int]:
+    """集計用の全記録と半荘数を、1回の取得から両方作る。
+
+    fetch_entries と count_rounds を別々に呼ぶと、まったく同じ全件クエリが
+    2回飛ぶ。自動更新で繰り返すと通信量がそのまま倍になるので、
+    両方要る画面はこちらを使う。
+    """
+    raw = _fetch(scope, value)
+    return [_entry(row) for row in raw], len({row["round_id"] for row in raw})
+
+
 def count_rounds(scope: str, value: str) -> int:
     """半荘数。
 

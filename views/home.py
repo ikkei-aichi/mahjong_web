@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from mahjong import session, ui
+from mahjong import live, session, ui
 from mahjong.errors import AppError
 from mahjong.repo import games as games_repo
 from mahjong.repo import groups as groups_repo
@@ -63,18 +63,34 @@ if recent_games:
 # --- 自分の成績 -------------------------------------------------------------
 
 st.markdown("### 📊 このグループの通算成績")
+
+# 通算表示なので、レートは直近の大会のものを借りる（金額列の有無だけに使う）。
+# ルールは滅多に変わらないので、自動更新のたびに取り直さない。
 try:
-    entries = queries.fetch_entries("group_id", group["group_id"])
-    names = groups_repo.player_names(group["group_id"])
+    rules, _ = tournaments_repo.get_ruleset(latest["id"])
 except AppError as exc:
     st.error(str(exc))
     st.stop()
 
-if not entries:
-    st.info("まだ対戦記録がありません。")
-else:
-    # 通算表示なので、レートは直近の大会のものを借りる（金額列の有無だけに使う）
-    rules, _ = tournaments_repo.get_ruleset(latest["id"])
+
+@live.auto
+def overall_stats() -> None:
+    """通算成績。他の人がスコアを入れたら自動で反映する。
+
+    取得をこの中に入れておかないと、再実行しても古い内容を描き直すだけになる。
+    """
+    try:
+        # 記録と半荘数は同じ全件クエリから作る（別々に呼ぶと2回飛ぶ）
+        entries, round_count = queries.fetch_entries_and_count("group_id", group["group_id"])
+        names = groups_repo.player_names(group["group_id"])
+    except AppError as exc:
+        st.warning(f"成績を取得できませんでした: {exc}")
+        return
+
+    if not entries:
+        st.info("まだ対戦記録がありません。")
+        return
+
     stats = aggregate(entries, names, rules)
     me = next((s for s in stats if s.player_id == group.get("my_player_id")), None)
     if me and me.games:
@@ -84,7 +100,11 @@ else:
         col3.metric("平均順位", f"{me.avg_rank:.2f}")
     ui.stats_table(stats, rules, key="home_stats")
 
-    st.caption(f"全 {queries.count_rounds('group_id', group['group_id'])} 半荘")
+    st.caption(f"全 {round_count} 半荘")
+    live.updated_caption()
+
+
+overall_stats()
 
 
 # --- 大会一覧（抜粋） -------------------------------------------------------

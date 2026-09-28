@@ -26,7 +26,7 @@ from typing import Callable, Sequence
 
 import streamlit as st
 
-from mahjong import session, ui
+from mahjong import live, session, ui
 from mahjong.errors import AppError
 from mahjong.repo import games as games_repo
 from mahjong.repo import tournaments as tournaments_repo
@@ -243,12 +243,25 @@ def next_kazes() -> list[str]:
     return ui.kaze_rotated(previous, -1)
 
 
+# 入力欄を初期化するための世代番号。自分の保存が成功したときだけ増やす。
+#
+# 旧実装は len(rounds) をキーに混ぜていた。自動更新で半荘を取り直すように
+# したので、それだと**同じ卓の別の人が登録しただけで、こちらが入力中の点数が
+# 配給原点に戻ってしまう**。自分の保存とそれ以外を分けて数える。
+_ENTRY_GEN = f"_entry_gen_{game_id}"
+
+
+def entry_generation() -> int:
+    return int(st.session_state.get(_ENTRY_GEN, 0))
+
+
 def save_new(results: list[SeatResult]) -> None:
     try:
         games_repo.add_round(game_id, results, seat_to_player)
     except AppError as exc:
         st.error(str(exc))
         return
+    st.session_state[_ENTRY_GEN] = entry_generation() + 1
     ui.flash(f"{len(rounds) + 1}半荘目を登録しました。")
     st.rerun()
 
@@ -266,14 +279,25 @@ def make_saver(round_id: str, no: int) -> Callable[[list[SeatResult]], None]:
     return save_edit
 
 
-@st.fragment
+@live.auto
 def entry_area() -> None:
+    global rounds
+
+    # 自動更新のたびに半荘を取り直す。同じ卓の別の人が登録した分がここで反映される。
+    # 取得をフラグメントの外に置いたままだと、再実行しても古い内容を描き直すだけで
+    # 意味がないので、必ずこの中で取る。
+    try:
+        rounds = games_repo.list_rounds(game_id)
+    except AppError as exc:
+        # 通信が切れただけで画面を壊さない。次の更新でやり直す。
+        st.warning(f"最新の記録を取得できませんでした: {exc}")
+
     st.markdown("### 今回の持ち点を入力")
 
-    # 半荘を1つ保存するたびにキーが変わるので、入力欄は自動的に初期値へ戻る。
+    # 自分の保存が成功するたびにキーが変わるので、入力欄は自動的に初期値へ戻る。
     # 逆に、保存に失敗している間はキーが変わらないので打った値が消えない。
     score_entry(
-        key=f"new_{game_id}_{len(rounds)}",
+        key=f"new_{game_id}_{entry_generation()}",
         base_kazes=next_kazes(),
         base_scores=[rules.start_score] * len(seats),
         submit_label=f"{len(rounds) + 1}半荘目を登録",
@@ -286,6 +310,7 @@ def entry_area() -> None:
 
     # --- 記録 ---
     st.markdown("### 記録")
+    live.updated_caption()
 
     totals: dict[str, int] = {s["player_id"]: 0 for s in seats}
     for rnd in rounds:

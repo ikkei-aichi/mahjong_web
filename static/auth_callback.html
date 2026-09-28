@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>確認しています…</title>
+<style>
+  body { font-family: system-ui, "Noto Sans JP", sans-serif; margin: 0;
+         min-height: 100vh; display: flex; align-items: center; justify-content: center;
+         background: #fafafa; color: #31333f; }
+  .box { text-align: center; padding: 24px; line-height: 1.7; }
+  a { color: #0b6bcb; }
+</style>
+</head>
+<body>
+<div class="box">
+  <p id="msg">メールアドレスを確認しています…</p>
+  <p><a id="manual" href="/">画面が切り替わらない場合はこちら</a></p>
+</div>
+<script>
+/*
+  メール確認リンクの受け取り口。
+
+  Streamlit のページではなく「ただの静的HTML」である点が肝心。
+  Supabase は既定で
+
+      .../auth_callback.html#access_token=...&refresh_token=...
+
+  の形で戻してくる。"#" から後ろはブラウザからサーバへ送られない決まりで、
+  さらに Streamlit は読み込み直後にこの "#..." を URL から消してしまうため、
+  Streamlit のページで受け取ることは原理的にできない。
+
+  そこで Streamlit を通らないこのページで先に受け取り、refresh token を
+  Cookie に入れてからアプリ本体へ送る。アプリは起動時に Cookie から
+  セッションを復元するので、これだけで「リンクを開いたらログイン済み」になる。
+
+  メールのテンプレートを書き換える必要は無い（テンプレート編集には
+  カスタムSMTPの契約が要るため、それを避けている）。
+
+  Cookie 名と属性は mahjong/auth.py の _COOKIE_NAME / SameSite=Lax に合わせる。
+*/
+(function () {
+  // /app/static/auth_callback.html を取り除いてアプリのルートを求める。
+  // Streamlit を --server.baseUrlPath 配下で動かしていても正しく戻れる。
+  var root = window.location.pathname.replace(/app\/static\/auth_callback\.html$/, "");
+  var appUrl = window.location.origin + root;
+  document.getElementById("manual").setAttribute("href", appUrl);
+
+  var hash = new URLSearchParams((window.location.hash || "").replace(/^#/, ""));
+  var search = new URLSearchParams(window.location.search || "");
+  var invite = search.get("invite");
+
+  function go(extra) {
+    var url = appUrl + "?" + extra + (invite ? "&invite=" + encodeURIComponent(invite) : "");
+    window.location.replace(url);
+  }
+
+  var err = hash.get("error_description") || hash.get("error") || search.get("error");
+  var refreshToken = hash.get("refresh_token");
+
+  if (refreshToken) {
+    try {
+      document.cookie =
+        "mahjong_refresh_token=" + encodeURIComponent(refreshToken) +
+        "; path=/; max-age=" + (14 * 24 * 60 * 60) + "; samesite=lax" +
+        (window.location.protocol === "https:" ? "; secure" : "");
+    } catch (e) { /* Cookie が使えない設定でも、下の案内までは出す */ }
+    go("confirmed=1");
+    return;
+  }
+
+  if (err) {
+    document.getElementById("msg").textContent = "確認できませんでした: " + err;
+    go("auth_error=" + encodeURIComponent(err));
+    return;
+  }
+
+  // トークンもエラーも無い（直接開かれた等）。アプリへ戻すだけ。
+  go("confirmed=0");
+})();
+</script>
+</body>
+</html>

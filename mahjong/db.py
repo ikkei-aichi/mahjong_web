@@ -36,6 +36,7 @@ from supabase import Client, ClientOptions, create_client
 
 ENV_URL = "SUPABASE_URL"
 ENV_KEY = "SUPABASE_KEY"
+ENV_APP_URL = "APP_URL"
 
 # st.session_state に置くキー。ブラウザセッション1つにつきクライアント1つ。
 SESSION_CLIENT_KEY = "_supabase_client"
@@ -102,6 +103,50 @@ def get_config() -> tuple[str, str]:
             "Publishable key (sb_publishable_...) に変更してください。"
         )
     return url, key
+
+
+# --- アプリ自身の公開URL -----------------------------------------------------
+# 確認メールの戻り先と招待リンクに使う。
+# Supabase は email_redirect_to を渡さないとダッシュボードの Site URL を使い、
+# 既定のままだと localhost に飛んでしまう。
+
+
+def _app_url_from_secrets() -> str | None:
+    try:
+        import streamlit as st
+    except ModuleNotFoundError:
+        return None
+    try:
+        return st.secrets["app"].get("base_url")
+    except Exception:
+        return None
+
+
+def app_base_url() -> str | None:
+    """このアプリの公開URL（末尾スラッシュなし）。分からなければ None。
+
+    解決順:
+        1. 環境変数 APP_URL
+        2. secrets.toml の [app] base_url
+        3. ブラウザが実際に開いている URL（st.context.url）
+
+    3 は自動で効くので普段は設定不要。ただしリバースプロキシの内側では
+    内部ホスト名が返りうるので、そういう環境では 1 か 2 で上書きする。
+    """
+    explicit = os.environ.get(ENV_APP_URL) or _app_url_from_secrets()
+    if explicit:
+        return str(explicit).rstrip("/")
+
+    try:
+        import streamlit as st
+        from urllib.parse import urlsplit, urlunsplit
+
+        parts = urlsplit(st.context.url)
+        if parts.scheme and parts.netloc:
+            return urlunsplit((parts.scheme, parts.netloc, "", "", "")).rstrip("/")
+    except Exception:
+        pass
+    return None
 
 
 def _new_client() -> Client:

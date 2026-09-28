@@ -9,7 +9,7 @@ from datetime import date
 
 import streamlit as st
 
-from mahjong import session, ui
+from mahjong import live, session, ui
 from mahjong.errors import AppError
 from mahjong.repo import games as games_repo
 from mahjong.repo import groups as groups_repo
@@ -101,24 +101,36 @@ for day in days:
 
 st.markdown("### 📊 この大会の成績")
 
-try:
-    entries = queries.fetch_entries("tournament_id", tournament_id)
-    names = groups_repo.player_names(group["group_id"])
-except AppError as exc:
-    st.error(str(exc))
-    st.stop()
 
-if not entries:
-    st.info("まだ記録がありません。開催日を開いて卓を作りましょう。")
-else:
+@live.auto
+def tournament_stats() -> None:
+    """大会成績。他の卓で入力された分も自動で反映する。"""
+    try:
+        # 記録と半荘数は同じ全件クエリから作る（別々に呼ぶと2回飛ぶ）
+        entries, round_count = queries.fetch_entries_and_count(
+            "tournament_id", tournament_id
+        )
+        names = groups_repo.player_names(group["group_id"])
+    except AppError as exc:
+        st.warning(f"成績を取得できませんでした: {exc}")
+        return
+
+    if not entries:
+        st.info("まだ記録がありません。開催日を開いて卓を作りましょう。")
+        return
+
     stats = aggregate(entries, names, rules)
     ui.stats_table(stats, rules, key="tournament_stats")
-    st.caption(f"全 {queries.count_rounds('tournament_id', tournament_id)} 半荘")
+    st.caption(f"全 {round_count} 半荘")
+    live.updated_caption()
 
     ui.link_button(
         "📊 くわしい成績・グラフ", "views/stats.py", key="t_stats",
         group=group["group_id"], tournament=tournament_id,
     )
+
+
+tournament_stats()
 
 ui.link_button(
     "⚙️ この大会の設定", "views/settings.py", key="t_settings",

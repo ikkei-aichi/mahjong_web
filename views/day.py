@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from mahjong import session, ui
+from mahjong import live, session, ui
 from mahjong.errors import AppError
 from mahjong.repo import SeatSpec
 from mahjong.repo import games as games_repo
@@ -128,25 +128,39 @@ with st.expander("🆕 新しい卓をはじめる", expanded=not day_games):
 
 
 # --- 卓の一覧 ---------------------------------------------------------------
+# 同じ日に複数の卓が同時に立つ。別の卓で入力された点数も自動で反映する。
 
-if not day_games:
-    st.info("この日はまだ卓がありません。")
-    st.stop()
 
-st.markdown("### 🀄 この日の卓")
+@live.auto
+def game_list() -> None:
+    try:
+        games = games_repo.list_games(day_id)
+    except AppError as exc:
+        st.warning(f"卓の一覧を取得できませんでした: {exc}")
+        return
 
-for game in day_games:
-    with st.container(border=True):
-        st.markdown(f"**{game['name']}** ・ {format_time(game['created_at'])}")
-        st.caption(f"{game['round_count']}半荘")
+    if not games:
+        st.info("この日はまだ卓がありません。")
+        return
 
-        ordered = sorted(game["seats"], key=lambda s: -s["total_point"])
-        for index, seat in enumerate(ordered):
-            col1, col2 = st.columns([3, 1])
-            col1.write(f"{ui.rank_medal(index)} {seat['player_name']}")
-            col2.write(ui.format_point(seat["total_point"]))
+    st.markdown("### 🀄 この日の卓")
+    live.updated_caption()
 
-        ui.link_button(
-            "入力・編集", "views/game.py", key=f"game_{game['id']}", primary=True,
-            group=group["group_id"], game=game["id"],
-        )
+    for game in games:
+        with st.container(border=True):
+            st.markdown(f"**{game['name']}** ・ {format_time(game['created_at'])}")
+            st.caption(f"{game['round_count']}半荘")
+
+            ordered = sorted(game["seats"], key=lambda s: -s["total_point"])
+            for index, seat in enumerate(ordered):
+                col1, col2 = st.columns([3, 1])
+                col1.write(f"{ui.rank_medal(index)} {seat['player_name']}")
+                col2.write(ui.format_point(seat["total_point"]))
+
+            ui.link_button(
+                "入力・編集", "views/game.py", key=f"game_{game['id']}", primary=True,
+                group=group["group_id"], game=game["id"],
+            )
+
+
+game_list()

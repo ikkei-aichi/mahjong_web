@@ -80,8 +80,8 @@ else:
             scope, value = "day_id", chosen_day
 
 try:
-    entries = queries.fetch_entries(scope, value)
-    rounds = queries.fetch_rounds_in_order(scope, value)
+    # 集計と推移グラフは同じ全件データから作る（別々に呼ぶと2回飛ぶ）
+    entries, rounds = queries.fetch_entries_and_rounds(scope, value)
 except AppError as exc:
     st.error(str(exc))
     st.stop()

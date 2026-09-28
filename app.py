@@ -16,13 +16,20 @@ st.set_page_config(
     layout="centered",
 )
 
-from mahjong import auth, session  # noqa: E402 - set_page_config より後に読む必要がある
+from mahjong import auth, live, session  # noqa: E402 - set_page_config より後に読む
 
+# 確認メールのリンクから戻ってきた場合はここでログイン状態にする。
+# require_login() はクエリパラメータを見ずに st.stop() するので、必ずその前に置く。
+auth.consume_auth_callback()
 auth.require_login()
 
 groups = session.my_groups()
 current = session.active_group(groups)
 has_group = current is not None
+
+# 招待リンク（?invite=）で来たときは、すでに別のグループに所属していても
+# 参加画面を開く。そうしないと home が既定ページになってコードが無視される。
+wants_join = bool(st.query_params.get("invite"))
 
 # ★ページは常に全部登録する★
 # st.switch_page は「いま st.navigation に渡されているページ」にしか遷移できない。
@@ -36,7 +43,10 @@ if has_group:
     session.sidebar_group_picker(groups, current)
 
 pages = [
-    st.Page("views/home.py", title="ホーム", icon="🏠", default=has_group, visibility=main),
+    st.Page(
+        "views/home.py", title="ホーム", icon="🏠",
+        default=has_group and not wants_join, visibility=main,
+    ),
     st.Page("views/tournaments.py", title="大会", icon="🏆", visibility=main),
     st.Page("views/stats.py", title="成績", icon="📊", visibility=main),
     st.Page("views/player.py", title="個人成績", icon="🧑", visibility=main),
@@ -46,8 +56,8 @@ pages = [
         "views/onboarding.py",
         title="はじめに" if not has_group else "グループを追加",
         icon="👋",
-        default=not has_group,
-        visibility="visible" if not has_group else "hidden",
+        default=(not has_group) or wants_join,
+        visibility="visible" if (not has_group or wants_join) else "hidden",
     ),
     # 一覧から辿る画面。サイドバーには出さないが URL では開ける。
     st.Page("views/tournament.py", title="大会の詳細", icon="🗓️", visibility="hidden"),
@@ -56,4 +66,5 @@ pages = [
 ]
 
 auth.sidebar_account()
+live.sidebar_control()
 st.navigation(pages).run()

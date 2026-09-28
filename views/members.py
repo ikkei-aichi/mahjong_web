@@ -173,17 +173,17 @@ if not is_admin:
 
 st.markdown("### 招待")
 st.caption(
-    "招待コードを渡すと、相手は自分のアカウントでこのグループの記録を見られるようになります。"
+    "招待リンクを送ると、相手は自分のアカウントでこのグループの記録を見られるようになります。"
     "参加時に「自分はこの名前です」と選んでもらえば、過去の成績も引き継がれます。"
 )
 
-if st.button("招待コードを発行", type="primary", width="stretch"):
+if st.button("招待リンクを発行", type="primary", width="stretch"):
     try:
         code = groups_repo.create_invite(group["group_id"])
     except AppError as exc:
         st.error(str(exc))
     else:
-        ui.flash(f"招待コード: {code}（7日間・20人まで有効）")
+        ui.flash(f"招待リンクを作りました（7日間・20人まで有効）。コード: {code}")
         st.rerun()
 
 try:
@@ -195,6 +195,11 @@ except AppError as exc:
 active = [i for i in invites if not i.get("revoked_at")]
 for invite in active:
     with st.container(border=True):
+        link = ui.invite_link(invite["code"])
+        if link:
+            st.caption("このURLを送るだけ（開くと参加画面にコードが入った状態で開きます）")
+            st.code(link, language=None)
+            st.caption("URLが使えない相手にはコードだけ伝える")
         st.code(invite["code"], language=None)
         used = invite.get("used_count", 0)
         limit = invite.get("max_uses")

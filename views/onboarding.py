@@ -24,6 +24,17 @@ tab_join, tab_create = st.tabs(["招待コードで参加", "グループを作�
 # --- 招待コードで参加 -------------------------------------------------------
 
 with tab_join:
+    # 招待リンク（?invite=CODE）で来た場合は入力欄を埋めておく。
+    # ウィジェットを作る前に session_state へ置く必要があるので、必ずこの位置で。
+    # setdefault なのは、あとから手で消した／直した値を上書きしないため。
+    #
+    # 「開いただけで参加」にはしない。join_group_by_code は先に使用回数を
+    # 加算するので、リンクのプレビューやプリフェッチで開かれると回数を
+    # 食い潰してしまう。参加は下のボタンを押したときだけ。
+    invited = (ui.param("invite") or "").strip().upper()
+    if invited:
+        st.session_state.setdefault("join_code", invited)
+
     st.markdown("#### 招待コードを入力")
     code = st.text_input(
         "招待コード", key="join_code", placeholder="ABCD2345", max_chars=16

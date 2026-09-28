@@ -143,7 +143,9 @@ def test_score_entry_is_a_single_fragment():
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef)
         for deco in node.decorator_list
-        if isinstance(deco, ast.Attribute) and deco.attr == "fragment"
+        # live.auto は「間隔がオフなら素通し、それ以外は st.fragment(run_every=...)」
+        # を貼る薄いラッパ。どちらもフラグメントとして数える。
+        if isinstance(deco, ast.Attribute) and deco.attr in ("fragment", "auto")
     ]
     assert decorated == ["entry_area"], (
         f"views/game.py のフラグメントが {decorated} になっている。"

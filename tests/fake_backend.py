@@ -269,6 +269,24 @@ def install(monkeypatch, backend: FakeBackend) -> FakeBackend:
         ],
     )
     monkeypatch.setattr(queries, "count_rounds", lambda scope, value: len(backend.rounds))
+    # 「1回の取得から両方作る」版。本物と同じ組み合わせを返すよう、
+    # 上で差し替えた偽物から組み立てる（二重に定義して食い違わせない）。
+    monkeypatch.setattr(
+        queries,
+        "fetch_entries_and_rounds",
+        lambda scope, value: (
+            queries.fetch_entries(scope, value),
+            queries.fetch_rounds_in_order(scope, value),
+        ),
+    )
+    monkeypatch.setattr(
+        queries,
+        "fetch_entries_and_count",
+        lambda scope, value: (
+            queries.fetch_entries(scope, value),
+            queries.count_rounds(scope, value),
+        ),
+    )
     monkeypatch.setattr(
         queries, "fetch_stored_rounds_for_recalc", lambda tid: backend.stored_for_recalc()
     )

@@ -149,6 +149,18 @@ def link_button(
         nav(page, **params)
 
 
+def invite_link(code: str) -> str | None:
+    """招待リンク。アプリの公開URLが分からなければ None。
+
+    コードを口で伝えて貼ってもらう手間をなくすため、URL の形でも渡せるようにする。
+    受け取り側は views/onboarding.py が ?invite= を読んで入力欄を埋める。
+    """
+    from .db import app_base_url
+
+    base = app_base_url()
+    return f"{base}/?invite={code}" if base else None
+
+
 def param(name: str) -> str | None:
     value = st.query_params.get(name)
     return value or None
