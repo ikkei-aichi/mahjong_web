@@ -132,13 +132,24 @@ def _is_dead_token(exc: Exception) -> bool:
     判定はトークンそのものの話に限る。通信断や APIキーの取り違えまで
     「失効」とみなすと、設定を直せば戻れたはずのログイン状態まで
     Cookie ごと捨ててしまう（例: "Invalid API key" は対象外）。
+
+    「すでに使用済み(already used)」も消さない。Supabase の refresh token は
+    使うたびに入れ替わるので、これは**別のタブが先に更新した**ときにも出る。
+    st.context.cookies はページを開いた時点の値で固定されており、その後に
+    別のタブが書いた新しいトークンは見えない。古い値で失敗したことを理由に
+    消すと、いま Cookie に入っている有効なトークンごと捨てて、
+    開いている全部のタブがログアウトする。
     """
     if is_network_error(exc):
         return False
+
     code = str(getattr(exc, "code", "") or "").lower()
+    message = str(getattr(exc, "message", None) or exc).lower()
+    if "already used" in message or "already_used" in code:
+        return False
+
     if code:
         return "refresh_token" in code or code in ("session_not_found", "session_expired")
-    message = str(getattr(exc, "message", None) or exc).lower()
     return "refresh token" in message
 
 

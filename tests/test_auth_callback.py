@@ -109,9 +109,29 @@ def test_wrong_api_key_does_not_count_as_dead():
     assert auth._is_dead_token(ApiError()) is False
 
 
-def test_used_refresh_token_counts_as_dead():
+def test_already_used_does_not_count_as_dead():
+    """「すでに使用済み」は別のタブが先に更新したときにも出る。
+
+    st.context.cookies はページを開いた時点の値で固定なので、その後に
+    別のタブが書いた新しいトークンは見えない。古い値で失敗したことを理由に
+    Cookie を消すと、いま入っている有効なトークンごと捨てて全部のタブが
+    ログアウトする。
+    """
     class ApiError(Exception):
         message = "Invalid Refresh Token: Already Used"
+
+    assert auth._is_dead_token(ApiError()) is False
+
+    class CodedError(Exception):
+        message = "oops"
+        code = "refresh_token_already_used"
+
+    assert auth._is_dead_token(CodedError()) is False
+
+
+def test_missing_refresh_token_counts_as_dead():
+    class ApiError(Exception):
+        message = "Invalid Refresh Token: Refresh Token Not Found"
 
     assert auth._is_dead_token(ApiError()) is True
 
